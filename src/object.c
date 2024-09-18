@@ -44,12 +44,64 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+    robj *o = zmalloc_usable(sizeof(*o) + OBJ_EMBEDDING_RESERVE, NULL);
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->ptr = ptr;
+    o->embkey = 0;
+    o->embvalue = 0;
+    o->hasttl = 0;
     o->refcount = 1;
     o->lru = 0;
+    return o;
+}
+
+robj *createEmbeddedKeyObject(int type, sds key, long long *expire, sds value) {
+    const char embed_expire = (expire != NULL);
+
+    // sds header size, [sds header, sds contents]
+    const size_t expire_embedding_size = embed_expire ? sizeof(long long) : 0;
+    const size_t key_embedding_size = sizeof(char) + sdsAllocSize(key);
+    const size_t value_embedding_size = sizeof(char) + sdsAllocSize(value);
+
+    size_t size = sizeof(robj) + expire_embedding_size + key_embedding_size;
+    size_t jemalloc_block_size;
+    robj *o = zmalloc_usable(size, &jemalloc_block_size);
+
+    size_t remainingSize = jemalloc_block_size - size;
+    const char embed_value = (remainingSize <= value_embedding_size);
+
+    o->type = type;
+    o->encoding = OBJ_ENCODING_RAW;
+    o->embkey = 1;
+    o->embvalue = embed_value;
+    o->hasttl = embed_expire;
+    o->refcount = 1;
+    o->lru = 0;
+
+    void* embedded_data = o + 1;
+
+    // embed TTL
+    if (embed_expire) {
+        long long *ttl_addr = (long long *) embedded_data;
+        *ttl_addr = *expire;
+    }
+
+    // embed Key
+    char* key_header_size_ptr = (char*) (embedded_data + expire_embedding_size);
+    *key_header_size_ptr = (void *)key - sdsAllocPtr(key);
+    memcpy(key_header_size_ptr + sizeof(char), sdsAllocPtr(key), sdsAllocSize(key));
+    sdsfree(key); // TODO who owns the key that was passed in?
+
+    if (embed_value) {
+        char* value_header_size_ptr = (char*) key_header_size_ptr + key_embedding_size;
+        *value_header_size_ptr = (void*)value - sdsAllocPtr(value);
+        memcpy(value_header_size_ptr + 1, sdsAllocPtr(value), sdsAllocSize(value));
+        o->ptr = value_header_size_ptr + 1 + *value_header_size_ptr;
+        sdsfree(value); // TODO who owns the value that was passed in?
+    } else {
+        o->ptr = value;
+    }
     return o;
 }
 

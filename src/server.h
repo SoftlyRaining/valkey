@@ -881,17 +881,23 @@ struct ValkeyModuleDigest {
 #define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000           /* LRU clock resolution in ms */
 
-#define OBJ_SHARED_REFCOUNT INT_MAX       /* Global object never destroyed. */
-#define OBJ_STATIC_REFCOUNT (INT_MAX - 1) /* Object allocated in the stack. */
+#define REFCOUNT_BITS 29
+#define REFCOUNT_MAX ((1 << (REFCOUNT_BITS - 1)) - 1) /* Max value of obj->refcount */
+#define OBJ_SHARED_REFCOUNT REFCOUNT_MAX       /* Global object never destroyed. */
+#define OBJ_STATIC_REFCOUNT (REFCOUNT_MAX - 1) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
+#define OBJ_EMBEDDING_RESERVE 16 /* reserve space for embedding TTL and key ptr at minimum */
 struct serverObject {
     unsigned type : 4;
     unsigned encoding : 4;
     unsigned lru : LRU_BITS; /* LRU time (relative to global lru_clock) or
                               * LFU data (least significant 8 bits frequency
                               * and most significant 16 bits access time). */
-    int refcount;
-    void *ptr;
+    unsigned hasttl : 1;
+    unsigned embkey : 1;
+    unsigned embvalue : 1;
+    int refcount : 29;
+    void *ptr;              /* Value */
 };
 
 /* The string name for an object's type as listed above
