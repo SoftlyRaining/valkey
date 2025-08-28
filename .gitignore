@@ -16,6 +16,7 @@ dump*.rdb
 *-sentinel
 *-server
 *-unit-gtests
+*-microbench
 doc-tools
 release
 misc/*

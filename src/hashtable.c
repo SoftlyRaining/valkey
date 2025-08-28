@@ -867,35 +867,33 @@ static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void 
 }
 #endif
 
-#if HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
-/* 32 bit architectures would require a different implementation
- * consider that even if they had Neon SIMD support,
- * they have 12 entries per bucket and only 32-bit scalar registers */
+#if HAVE_ARM_NEON
+static int findKeyInBucketNEON(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    uint8x8_t hash_vector = vld1_u8(b->hashes);
+    uint8x8_t h2_vector = vdup_n_u8(h2);
+    /* Compare all hash values against the target hash simultaneously.
+     * The result is a vector of 16 bytes, where each byte is 0xFF if
+     * the corresponding hash matches the target hash, and 0x00 if it
+     * doesn't. */
+    uint8x8_t result = vceq_u8(hash_vector, h2_vector);
 
-static inline int popMatchBitmask(uint64_t *mask) {
-    /* one byte (8 bits) per item - either 0x80 or 0x00 */
-    int pos = __builtin_ctzll(*mask) >> 3;
-    *mask &= (*mask - 1); /* clear lowest set bit */
-    return pos;
-}
+    /* Get the bucket's presence mask - indicates which positions are filled. */
+    BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
+    const uint8_t test_array[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+    uint8x8_t expansion_mask = vld1_u8(test_array);
+    uint8x8_t presence_vector = vand_u8(vdup_n_u8(presence_mask), expansion_mask);
+    uint8x8_t combined = vand_u8(result, presence_vector);
 
-static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
-    const uint8x8_t hash_vector = vld1_u8(b->hashes);             /* simple load */
-    const uint8x8_t h2_vector = vdup_n_u8(h2);                    /* duplicated into every byte */
-    const uint8x8_t equal_mask = vceq_u8(hash_vector, h2_vector); /* compare: 8 bits per item, 0xFF or 0x00 */
-    uint64_t matches = vget_lane_u64(vreinterpret_u64_u8(equal_mask), 0);
+    if (!vmaxv_u8(combined)) return 0; /* no potential matches */
 
-    /* reduce each match to one bit and zero out invalid positions */
-    const uint64_t valid_entry_mask = (1ul << (ENTRIES_PER_BUCKET << 3)) - 1ul;
-    matches = matches & 0x8080808080808080ul & valid_entry_mask;
-
-    while (matches) {
-        int pos = popMatchBitmask(&matches);
-        if ((b->presence & (1 << pos)) &&
-            checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index))
-            return 1;
+    uint8_t bytes[8];
+    vst1_u8(bytes, combined);
+    for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
+        if (bytes[pos]) {
+            if (checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return 1;
+        }
     }
-    return 0; /* No match */
+    return 0;
 }
 #endif
 
@@ -926,8 +924,8 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
 #if HAVE_X86_SIMD
             /* All x86-64 CPUs have SSE2. */
             if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
-#elif HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
-            if (findKeyInBucketNeon(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+#elif HAVE_ARM_NEON
+            if (findKeyInBucketNEON(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
 #else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {

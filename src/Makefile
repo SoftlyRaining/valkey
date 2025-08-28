@@ -634,6 +634,9 @@ ENGINE_BENCHMARK_OBJ = \
     valkey-benchmark-dataset.o \
     valkey_strtod.o \
     zmalloc.o
+MICROBENCH_NAME=$(ENGINE_NAME)-microbench$(PROG_SUFFIX)
+MICROBENCH_OBJ=valkey-microbench.o
+MICROBENCH_OBJ+=$(ENGINE_SERVER_OBJ)
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
@@ -747,7 +750,16 @@ $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
 $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
 	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
-DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
+# valkey-microbench
+CXX ?= g++
+CXXFLAGS ?= -std=c++17 -O3 -Wall
+$(MICROBENCH_NAME): $(MICROBENCH_OBJ)
+	$(CXX) $(FINAL_LDFLAGS) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
@@ -774,7 +786,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(MICROBENCH_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 	-(cd modules/lua && $(MAKE) clean)
 
@@ -823,6 +835,9 @@ lcov:
 
 bench: $(ENGINE_BENCHMARK_NAME)
 	./$(ENGINE_BENCHMARK_NAME)
+
+microbench: $(MICROBENCH_NAME)
+	./$(MICROBENCH_NAME)
 
 32bit:
 	@echo ""
