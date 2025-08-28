@@ -16,6 +16,7 @@ dump*.rdb
 *-sentinel
 *-server
 *-unit-gtests
+*-microbench
 doc-tools
 release
 misc/*
@@ -58,3 +59,6 @@ cmake-build-debug/
 cmake-build-release/
 __pycache__
 src/unit/.flags
+*.png
+*.pyc
+src/benchmarks/*benchmark_output.txt

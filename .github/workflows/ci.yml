@@ -321,6 +321,114 @@ jobs:
       - name: make
         run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
 
+  build-microbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install Google Benchmark
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake
+          git clone --branch v1.9.5 --depth 1 https://github.com/google/benchmark.git /tmp/benchmark
+          cd /tmp/benchmark
+          cmake -DBENCHMARK_DOWNLOAD_DEPENDENCIES=on -DBENCHMARK_ENABLE_GTEST_TESTS=off -DCMAKE_BUILD_TYPE=Release -S . -B build
+          cmake --build build -j$(nproc)
+          sudo cmake --install build
+      - name: build valkey-microbench
+        run: make -j$(nproc) valkey-microbench
+      - name: upload microbench binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: valkey-microbench
+          path: src/valkey-microbench
+          retention-days: 1
+
+  microbench-hot:
+    runs-on: ubuntu-latest
+    needs: build-microbench
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: valkey-microbench
+          path: src
+      - name: run hot benchmarks
+        run: |
+          chmod +x src/valkey-microbench
+          python3 src/benchmarks/run_benchmarks.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-output-hot
+          path: src/benchmarks/benchmark_output.txt
+          retention-days: 7
+
+  microbench-cold:
+    runs-on: ubuntu-latest
+    needs: build-microbench
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: valkey-microbench
+          path: src
+      - name: run cold benchmarks
+        run: |
+          chmod +x src/valkey-microbench
+          python3 src/benchmarks/run_cold_benchmarks.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-output-cold
+          path: src/benchmarks/cold_benchmark_output.txt
+          retention-days: 7
+
+  microbench-memory:
+    runs-on: ubuntu-latest
+    needs: build-microbench
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: valkey-microbench
+          path: src
+      - name: run memory benchmarks
+        run: |
+          chmod +x src/valkey-microbench
+          python3 src/benchmarks/run_memory_benchmarks.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-output-memory
+          path: src/benchmarks/memory_benchmark_output.txt
+          retention-days: 7
+
+  microbench-report:
+    runs-on: ubuntu-latest
+    needs: [microbench-hot, microbench-cold, microbench-memory]
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-output-hot
+          path: src/benchmarks
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-output-cold
+          path: src/benchmarks
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-output-memory
+          path: src/benchmarks
+      - name: install dependencies
+        run: pip install matplotlib numpy
+      - name: generate reports
+        run: |
+          python3 src/benchmarks/generate_report.py
+          python3 src/benchmarks/generate_cold_report.py
+          python3 src/benchmarks/generate_memory_report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: src/benchmarks/*.png
+          retention-days: 30
+
   format-yaml:
     runs-on: ubuntu-latest
     steps:

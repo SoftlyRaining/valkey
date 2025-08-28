@@ -125,6 +125,37 @@ if (BUILD_UNIT_GTESTS)
     add_subdirectory(unit)
 endif ()
 
+# Target: valkey-microbench
+if (BUILD_MICROBENCH)
+    message(STATUS "Building microbenchmarks")
+    find_package(benchmark REQUIRED)
+    file(GLOB MICROBENCH_SRCS
+        ${CMAKE_SOURCE_DIR}/src/benchmarks/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/benchmarks/common/*.cpp
+        ${CMAKE_SOURCE_DIR}/src/benchmarks/data_structures/*.cpp)
+
+    # Server main() is weak, so benchmark's BENCHMARK_MAIN() will override it
+    add_executable(valkey-microbench ${MICROBENCH_SRCS} ${VALKEY_SERVER_SRCS})
+    target_include_directories(valkey-microbench PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/benchmarks)
+    target_compile_features(valkey-microbench PRIVATE cxx_std_20)
+    target_link_libraries(valkey-microbench benchmark::benchmark pthread fpconv hdr_histogram valkey::valkey)
+
+    if (USE_JEMALLOC OR USE_TCMALLOC OR USE_TCMALLOC_MINIMAL)
+        target_link_libraries(valkey-microbench ${ALLOCATOR_LIB})
+    endif ()
+
+    if (BUILD_SANITIZER)
+        target_compile_options(valkey-microbench PRIVATE ${VALKEY_SANITAIZER_CFLAGS})
+        target_link_options(valkey-microbench PRIVATE ${VALKEY_SANITAIZER_LDFLAGS})
+    endif ()
+
+    add_dependencies(valkey-microbench generate_commands_def)
+    add_dependencies(valkey-microbench generate_fmtargs_h)
+    add_dependencies(valkey-microbench release_header)
+endif ()
+
 # Friendly hint like the Makefile one
 file(RELATIVE_PATH _CMAKE_DIR_RELATIVE_PATH "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
 add_custom_target(

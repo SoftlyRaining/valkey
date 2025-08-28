@@ -17,6 +17,7 @@ set(BUILD_LUA "static" CACHE STRING "Build Valkey Lua scripting engine: static (
 option(BUILD_UNIT_GTESTS "Build valkey-unit-gtests" OFF)
 option(BUILD_TEST_MODULES "Build all test modules" OFF)
 option(BUILD_EXAMPLE_MODULES "Build example modules" OFF)
+option(BUILD_MICROBENCH "Build valkey-microbench" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
@@ -43,6 +44,7 @@ unset(BUILD_TLS_MODULE CACHE)
 unset(BUILD_UNIT_GTESTS CACHE)
 unset(BUILD_TEST_MODULES CACHE)
 unset(BUILD_EXAMPLE_MODULES CACHE)
+unset(BUILD_MICROBENCH CACHE)
 unset(USE_TLS CACHE)
 unset(DEBUG_FORCE_DEFRAG CACHE)
 

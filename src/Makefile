@@ -611,6 +611,7 @@ ENGINE_CLI_OBJ = \
     valkey_strtod.o \
     zmalloc.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
+MICROBENCH_NAME=$(ENGINE_NAME)-microbench$(PROG_SUFFIX)
 ENGINE_BENCHMARK_OBJ = \
     adlist.o \
     ae.o \
@@ -636,6 +637,7 @@ ENGINE_BENCHMARK_OBJ = \
     valkey-benchmark.o \
     valkey_strtod.o \
     zmalloc.o
+ENGINE_BENCHMARK_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
@@ -749,7 +751,34 @@ $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
 $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
 	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
-DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
+# valkey-microbench
+CXX ?= g++
+CXXFLAGS ?= -std=c++17 -O3 -Wall -Ibenchmarks
+MICROBENCH_SRC = $(wildcard benchmarks/*.cpp benchmarks/**/*.cpp)
+MICROBENCH_OBJ = $(MICROBENCH_SRC:.cpp=.o)
+MICROBENCH_SERVER_OBJ=$(filter-out server.o,$(ENGINE_SERVER_OBJ)) server_nomain.o
+# server object without LTO (to allow main symbol manipulation)
+server_nomain.o: server.c .make-prerequisites
+	$(CC) $(filter-out -flto%,$(FINAL_CFLAGS)) -Dmain=_valkey_main_unused -I. -MMD -o $@ -c $<
+
+$(MICROBENCH_NAME): .make-prerequisites $(MICROBENCH_OBJ) $(MICROBENCH_SERVER_OBJ)
+	$(CXX) $(filter-out -flto%,$(FINAL_LDFLAGS)) $(MICROBENCH_BENCHMARK_LDFLAGS) -o $@ $(filter-out .make-prerequisites,$^) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
+
+# C++ flags for benchmarks (filter out C-specific flags from FINAL_CFLAGS)
+MICROBENCH_CXXFLAGS = -std=c++20 -O3 -Wall -Wno-pedantic -Ibenchmarks
+ifeq ($(uname_S),Darwin)
+BENCHMARK_PREFIX ?= $(shell brew --prefix google-benchmark 2>/dev/null)
+ifneq ($(BENCHMARK_PREFIX),)
+MICROBENCH_CXXFLAGS += -I$(BENCHMARK_PREFIX)/include
+MICROBENCH_BENCHMARK_LDFLAGS = -L$(BENCHMARK_PREFIX)/lib
+endif
+endif
+MICROBENCH_CFLAGS = $(filter-out -std=gnu11 -std=c99 -Wstrict-prototypes -pedantic,$(FINAL_CFLAGS))
+
+benchmarks/%.o: benchmarks/%.cpp .make-prerequisites
+	$(CXX) $(MICROBENCH_CXXFLAGS) $(MICROBENCH_CFLAGS) -I. -c $< -o $@
+
+DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
@@ -776,7 +805,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(MICROBENCH_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) benchmarks/*.o benchmarks/*/*.o unit/*.o unit/*.d trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 	-(cd modules/lua && $(MAKE) clean)
 
@@ -825,6 +854,9 @@ lcov:
 
 bench: $(ENGINE_BENCHMARK_NAME)
 	./$(ENGINE_BENCHMARK_NAME)
+
+microbench: $(MICROBENCH_NAME)
+	./$(MICROBENCH_NAME)
 
 32bit:
 	@echo ""
