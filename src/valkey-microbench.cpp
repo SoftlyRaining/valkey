@@ -6,14 +6,13 @@
 #include <vector>
 
 extern "C" {
-    #include "hashtable.h"
+#include "hashtable.h"
 }
 
-static void BM_HashtableFind_0Miss(benchmark::State& state) {
+static void BM_HashtableFind_0Miss(benchmark::State &state) {
     // Prepare a hashtable and insert some keys
     hashtableType type = {
-        .instant_rehashing = 1
-    };
+        .instant_rehashing = 1};
     hashtable *ht = hashtableCreate(&type);
 
     const int num_keys = 16384;
@@ -34,11 +33,10 @@ static void BM_HashtableFind_0Miss(benchmark::State& state) {
     hashtableRelease(ht);
 }
 
-static void BM_HashtableFind_50Miss(benchmark::State& state) {
+static void BM_HashtableFind_50Miss(benchmark::State &state) {
     // Prepare a hashtable and insert some keys
     hashtableType type = {
-        .instant_rehashing = 1
-    };
+        .instant_rehashing = 1};
     hashtable *ht = hashtableCreate(&type);
 
     int num_to_remove = 16384;
@@ -69,11 +67,10 @@ static void BM_HashtableFind_50Miss(benchmark::State& state) {
     hashtableRelease(ht);
 }
 
-static void BM_HashtableFind_100Miss(benchmark::State& state) {
+static void BM_HashtableFind_100Miss(benchmark::State &state) {
     // Prepare a hashtable and insert some keys
     hashtableType type = {
-        .instant_rehashing = 1
-    };
+        .instant_rehashing = 1};
     hashtable *ht = hashtableCreate(&type);
 
     const int num_keys = 16384;

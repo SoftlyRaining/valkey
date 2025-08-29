@@ -872,18 +872,16 @@ static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void 
  * consider that even if they had Neon SIMD support,
  * they have 12 entries per bucket and only 32-bit scalar registers */
 
-static inline __attribute__((hot,always_inline))
-int popMatchBitmask(uint64_t *mask) {
+static inline __attribute__((hot, always_inline)) int popMatchBitmask(uint64_t *mask) {
     /* one byte (8 bits) per item - either 0x80 or 0x00 */
     int pos = __builtin_ctzll(*mask) >> 3;
-    *mask &= (*mask - 1);  // clear lowest set bit
+    *mask &= (*mask - 1); /* clear lowest set bit */
     return pos;
 }
 
-static __attribute__((hot))
-int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
-    const uint8x8_t hash_vector  = vld1_u8(b->hashes); /* simple load */
-    const uint8x8_t h2_vector = vdup_n_u8(h2); /* duplicated into every byte */
+static __attribute__((hot)) int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    const uint8x8_t hash_vector = vld1_u8(b->hashes);             /* simple load */
+    const uint8x8_t h2_vector = vdup_n_u8(h2);                    /* duplicated into every byte */
     const uint8x8_t equal_mask = vceq_u8(hash_vector, h2_vector); /* compare: 8 bits per item, 0xFF or 0x00 */
     uint64_t matches = vget_lane_u64(vreinterpret_u64_u8(equal_mask), 0);
 
@@ -893,7 +891,7 @@ int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, i
 
     while (matches) {
         int pos = popMatchBitmask(&matches);
-        if ((b->presence & (1 << pos)) && 
+        if ((b->presence & (1 << pos)) &&
             checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index))
             return 1;
     }
