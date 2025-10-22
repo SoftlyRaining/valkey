@@ -130,7 +130,8 @@ void onMaxBatchSizeChange(void) {
 
 /* Prefetch the given pointer and move to the next key in the batch. */
 static void prefetchAndMoveToNextKey(void *addr) {
-    valkey_prefetch(addr);
+    /* Prefetching disabled for testing */
+    (void)addr;
     /* While the prefetch is in progress, we can continue to the next key */
     batch->cur_idx = (batch->cur_idx + 1) % batch->key_count;
 }
@@ -308,7 +309,7 @@ static void prefetchCommands(void) {
         if (!c || c->argc <= 1) continue;
         /* Skip prefetching first argv (cmd name) it was already looked up by the I/O thread. */
         for (int j = 1; j < c->argc; j++) {
-            valkey_prefetch(c->argv[j]);
+            /* valkey_prefetch(c->argv[j]); // Disabled for testing */
         }
     }
 
@@ -318,7 +319,7 @@ static void prefetchCommands(void) {
         if (!c || c->argc <= 1) continue;
         for (int j = 1; j < c->argc; j++) {
             if (c->argv[j]->encoding == OBJ_ENCODING_RAW) {
-                valkey_prefetch(c->argv[j]->ptr);
+                /* valkey_prefetch(c->argv[j]->ptr); // Disabled for testing */
             }
         }
     }
