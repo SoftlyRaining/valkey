@@ -1016,65 +1016,7 @@ static inline incrementalFind *incrementalFindFromOpaque(hashtableIncrementalFin
     return (incrementalFind *)(void *)state;
 }
 
-/* Prefetches all filled entries in the given bucket to optimize future memory access. */
-static void prefetchBucketEntries(bucket *b) {
-    if (!b->presence) return;
-    for (int pos = 0; pos < numBucketPositions(b); pos++) {
-        if (isPositionFilled(b, pos)) {
-            valkey_prefetch(b->entries[pos]);
-        }
-    }
-}
 
-/* Returns the child bucket if 'current_bucket' is chained. Otherwise, returns the bucket
- * at 'next_top_level_index' in the table. Returns NULL if neither exists. */
-static bucket *getNextBucket(bucket *current_bucket, size_t next_top_level_index, hashtable *ht, int table_index) {
-    bucket *next_bucket = NULL;
-    if (current_bucket->chained) {
-        next_bucket = getChildBucket(current_bucket);
-    } else {
-        size_t table_size = numBuckets(ht->bucket_exp[table_index]);
-        if (next_top_level_index < table_size) {
-            next_bucket = &ht->tables[table_index][next_top_level_index];
-        }
-    }
-    return next_bucket;
-}
-
-/* This function prefetches data that will be needed in subsequent iterations:
- * - The entries of the next bucket
- * - The next of the next bucket
- * It attempts to bring this data closer to the L1 cache to reduce future memory access latency.
- *
- * Cache state before this function is called (due to last call for this function):
- * 1. The current bucket and its entries are likely already in cache.
- * 2. The next bucket is in cache.
- */
-static void prefetchNextBucketEntries(iter *iter, bucket *current_bucket) {
-    size_t next_index = iter->index + 1;
-    bucket *next_bucket = getNextBucket(current_bucket, next_index, iter->hashtable, iter->table);
-    if (next_bucket) {
-        prefetchBucketEntries(next_bucket);
-        /* Calculate the target top-level index for the next-next bucket. */
-        if (!current_bucket->chained) next_index++;
-        bucket *next_next_bucket = getNextBucket(next_bucket, next_index, iter->hashtable, iter->table);
-        if (next_next_bucket) {
-            valkey_prefetch(next_next_bucket);
-        }
-    }
-}
-
-/* Prefetches the values associated with the entries in the given bucket by
- * calling the entryPrefetchValue callback in the hashtableType */
-static void prefetchBucketValues(bucket *b, hashtable *ht) {
-    if (!b->presence) return;
-    assert(ht->type->entryPrefetchValue != NULL);
-    for (int pos = 0; pos < numBucketPositions(b); pos++) {
-        if (isPositionFilled(b, pos)) {
-            ht->type->entryPrefetchValue(b->entries[pos]);
-        }
-    }
-}
 
 static inline int isSafe(iter *iter) {
     return (iter->flags & HASHTABLE_ITER_SAFE);
@@ -1692,7 +1634,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             for (int pos = data->pos; pos < numBucketPositions(b); pos++) {
                 if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
                     /* It's a candidate. */
-                    valkey_prefetch(b->entries[pos]);
+                    /* valkey_prefetch(b->entries[pos]); // Disabled for testing */
                     data->pos = pos;
                     data->state = HASHTABLE_CHECK_ENTRY;
                     return true;
@@ -1728,7 +1670,7 @@ bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
                 data->state = HASHTABLE_NOT_FOUND;
                 return false;
             }
-            valkey_prefetch(data->bucket);
+            /* valkey_prefetch(data->bucket); // Disabled for testing */
             data->state = HASHTABLE_NEXT_ENTRY;
             data->pos = 0;
         }
@@ -2084,10 +2026,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         bucket *b = iter->bucket;
         if (iter->pos_in_bucket == 0) {
-            if (shouldPrefetchValues(iter)) {
-                prefetchBucketValues(b, iter->hashtable);
-            }
-            prefetchNextBucketEntries(iter, b);
+            /* Prefetching disabled for testing */
         }
         if (!isPositionFilled(b, iter->pos_in_bucket)) {
             /* No entry here. */
