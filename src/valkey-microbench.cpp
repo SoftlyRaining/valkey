@@ -11,34 +11,31 @@ extern "C" {
 #include "dict.h"
 }
 
+constexpr size_t megabyte = 1024 * 1024;
+constexpr size_t dataset_size = 450 * megabyte; // 10x L3 cache size on my hardware
+constexpr size_t key_string_size = 128;
+constexpr size_t item_count = dataset_size / key_string_size;
+
 // Use exact dictType from unit tests
 static uint64_t hashCallback(const void *key) {
     return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
 }
 
-static int compareCallback(const void *key1, const void *key2) {
-    int l1, l2;
-    l1 = strlen((char *)key1);
-    l2 = strlen((char *)key2);
-    if (l1 != l2) return 0;
-    return memcmp(key1, key2, l1) == 0;
+static int dictCompareCallback(const void *key1, const void *key2) {
+    char *keystr1 = (char *)key1;
+    char *keystr2 = (char *)key2;
+    return strcmp(keystr1, keystr2) == 0;
 }
 
-static void freeCallback(void *val) {
-    // Don't free values since we're using nullptr
-    (void)val;
-}
+static dictType BenchmarkDictType = {hashCallback, nullptr, dictCompareCallback, nullptr, nullptr, nullptr};
 
-static dictType BenchmarkDictType = {hashCallback, nullptr, compareCallback, freeCallback, nullptr, nullptr};
-
-// Helper function like unit tests
 static char *stringFromInt(int value) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "key%d", value);
-    char *s = static_cast<char *>(malloc(len + 1));
+    constexpr size_t placeholder_size = 17; // key:123456789012 and null terminator
+    char *s = static_cast<char *>(malloc(key_string_size));
     if (!s) return nullptr;
-    memcpy(s, buf, len);
-    s[len] = '\0';
+    std::fill_n(s, key_string_size, 'X');
+    // Make string unique at end so whole string must be loaded for string comparison
+    snprintf(s + key_string_size - placeholder_size, placeholder_size, "key:%012d", value);
     return s;
 }
 
@@ -48,9 +45,8 @@ static void BM_HashtableFind_0Miss(benchmark::State &state) {
         .instant_rehashing = 1};
     hashtable *ht = hashtableCreate(&type);
 
-    const int num_keys = 16384;
     std::vector<char *> keys;
-    for (int i = 0; i < num_keys; ++i) {
+    for (int i = 0; static_cast<size_t>(i) < item_count; ++i) {
         char *key = stringFromInt(i);
         keys.push_back(key);
         hashtableAdd(ht, key);
@@ -60,7 +56,7 @@ static void BM_HashtableFind_0Miss(benchmark::State &state) {
     for (auto _ : state) {
         bool found = hashtableFind(ht, keys[idx], nullptr);
         benchmark::DoNotOptimize(found);
-        idx = (idx + 1) % num_keys;
+        idx = (idx + 1) % item_count;
         benchmark::ClobberMemory();
     }
 
@@ -78,7 +74,7 @@ static void BM_HashtableFind_50Miss(benchmark::State &state) {
         .instant_rehashing = 1};
     hashtable *ht = hashtableCreate(&type);
 
-    int num_to_remove = 16384;
+    int num_to_remove = item_count;
     const int num_keys = num_to_remove * 2;
 
     std::vector<char *> keys;
@@ -118,8 +114,7 @@ static void BM_HashtableFind_100Miss(benchmark::State &state) {
         .instant_rehashing = 1};
     hashtable *ht = hashtableCreate(&type);
 
-    const int num_keys = 16384;
-    // Insert keys 0-16383
+    const int num_keys = item_count;
     std::vector<char *> inserted_keys;
     for (int i = 0; i < num_keys; ++i) {
         char *key = stringFromInt(i);
@@ -127,10 +122,10 @@ static void BM_HashtableFind_100Miss(benchmark::State &state) {
         hashtableAdd(ht, key);
     }
 
-    // Create different keys for lookup that don't exist (100000+)
+    // Create different keys for lookup that don't exist
     std::vector<char *> lookup_keys;
     for (int i = 0; i < num_keys; ++i) {
-        char *key = stringFromInt(i + 100000);
+        char *key = stringFromInt(i + item_count);
         lookup_keys.push_back(key);
     }
 
@@ -168,7 +163,7 @@ BENCHMARK(BM_HashtableFind_100Miss)
 static void BM_DictFind_0Miss(benchmark::State &state) {
     dict *d = dictCreate(&BenchmarkDictType);
 
-    const int num_keys = 16384;
+    const int num_keys = item_count;
     std::vector<char *> keys;
     for (int i = 0; i < num_keys; ++i) {
         char *key = stringFromInt(i);
@@ -195,7 +190,7 @@ static void BM_DictFind_0Miss(benchmark::State &state) {
 static void BM_DictFind_50Miss(benchmark::State &state) {
     dict *d = dictCreate(&BenchmarkDictType);
 
-    int num_to_remove = 16384;
+    int num_to_remove = item_count;
     const int num_keys = num_to_remove * 2;
 
     std::vector<char *> keys;
@@ -232,8 +227,7 @@ static void BM_DictFind_50Miss(benchmark::State &state) {
 static void BM_DictFind_100Miss(benchmark::State &state) {
     dict *d = dictCreate(&BenchmarkDictType);
 
-    const int num_keys = 16384;
-    // Insert keys 0-16383
+    const int num_keys = item_count;
     std::vector<char *> inserted_keys;
     for (int i = 0; i < num_keys; ++i) {
         char *key = stringFromInt(i);
@@ -241,10 +235,10 @@ static void BM_DictFind_100Miss(benchmark::State &state) {
         dictAdd(d, key, nullptr);
     }
 
-    // Create different keys for lookup that don't exist (100000+)
+    // Create different keys for lookup that don't exist
     std::vector<char *> lookup_keys;
     for (int i = 0; i < num_keys; ++i) {
-        char *key = stringFromInt(i + 100000);
+        char *key = stringFromInt(i + item_count);
         lookup_keys.push_back(key);
     }
 
