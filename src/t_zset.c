@@ -337,7 +337,7 @@ static void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **upda
 }
 
 /* Delete specified node from the skiplist. */
-static void zslDelete(zskiplist *zsl, zskiplistNode *node) {
+void zslDelete(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     zskiplistNode *x = zslGetHeader(zsl);
     for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
@@ -362,7 +362,7 @@ static void zslDelete(zskiplist *zsl, zskiplistNode *node) {
  * node can be kept it returns NULL.
  * Otherwise the skiplist is modified by removing and re-adding a new
  * element, which is more costly. A pointer to the new node is returned. */
-static zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore) {
+zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore) {
     /* If the node, after the score update, would be still exactly
      * at the same position, we can just update the score without
      * actually removing and re-inserting the element in the skiplist. */
@@ -494,7 +494,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
  * range->maxex). When inclusive a score >= min && score <= max is deleted.
  * Note that this function takes the reference to the hash table view of the
  * sorted set, in order to remove the elements from the hash table too. */
-static unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht) {
+unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -513,7 +513,7 @@ static unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, ha
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
         sds ele = zslGetNodeElement(x);
-        hashtablePop(ht, ele, NULL);
+        if (ht) hashtablePop(ht, ele, NULL);
         zslFreeNode(x);
         removed++;
         x = next;
@@ -553,7 +553,7 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
 
 /* Delete all the elements with rank between start and end from the skiplist.
  * Start and end are inclusive. Note that start and end need to be 1-based */
-static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht) {
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;
@@ -572,7 +572,7 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
-        hashtableDelete(ht, zslGetNodeElement(x));
+        if (ht) hashtableDelete(ht, zslGetNodeElement(x));
         zslFreeNode(x);
         removed++;
         traversed++;
@@ -583,7 +583,7 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
 
 /* Find the rank for a specific skiplist member node. Counts nodes after the one
  * specified and subtracts from list length. Note that rank is 1-based.  */
-static unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
+unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
     unsigned long count_after_node = 0;
     while (node) { /* note this is never null the first time */
         int highest_node_span = zslGetNodeHeight(node) - 1;
