@@ -224,7 +224,9 @@ struct ValkeyModuleKey {
             zlexrangespec lrs; /* Lex range. */
             uint32_t start;    /* Start pos for positional ranges. */
             uint32_t end;      /* End pos for positional ranges. */
-            void *current;     /* Zset iterator current node. */
+            void *current;     /* Current node for listpack, or NULL for skiplist. */
+            zskiplistIterator iter; /* Skiplist iterator. */
+            zskiplistNode *node;    /* Current node from skiplist iterator. */
             int er;            /* Zset iterator end reached flag
                                    (true if end was reached). */
         } zset;
@@ -5129,11 +5131,16 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
         zskiplist *zsl = zs->zsl;
-        key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0, NULL) : zslNthInRange(zsl, zrs, -1, NULL);
+        zslInitIterator(&key->u.zset.iter, zsl);
+        zslSeekToScoreRange(&key->u.zset.iter, zrs->min, zrs->max, zrs->minex, zrs->maxex, first ? 0 : -1);
+        if (first) {
+            key->u.zset.er = !zslNext(&key->u.zset.iter, &key->u.zset.node);
+        } else {
+            key->u.zset.er = !zslNext(&key->u.zset.iter, &key->u.zset.node);
+        }
     } else {
         serverPanic("Unsupported zset encoding");
     }
-    if (key->u.zset.current == NULL) key->u.zset.er = 1;
     return VALKEYMODULE_OK;
 }
 
@@ -5192,12 +5199,18 @@ int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModule
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(key->value);
         zskiplist *zsl = zs->zsl;
-        key->u.zset.current = first ? zslNthInLexRange(zsl, zlrs, 0) : zslNthInLexRange(zsl, zlrs, -1);
+        zskiplistNode *node = first ? zslNthInLexRange(zsl, zlrs, 0) : zslNthInLexRange(zsl, zlrs, -1);
+        zslInitIterator(&key->u.zset.iter, zsl);
+        if (node) {
+            unsigned long rank = zslGetRank(zsl, node);
+            zslSeekToRank(&key->u.zset.iter, rank - 1);
+            key->u.zset.er = !zslNext(&key->u.zset.iter, &key->u.zset.node);
+        } else {
+            key->u.zset.er = 1;
+        }
     } else {
         serverPanic("Unsupported zset encoding");
     }
-    if (key->u.zset.current == NULL) key->u.zset.er = 1;
-
     return VALKEYMODULE_OK;
 }
 
@@ -5230,8 +5243,8 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
     ValkeyModuleString *str;
 
     if (!key->value || key->value->type != OBJ_ZSET) return NULL;
-    if (key->u.zset.current == NULL) return NULL;
     if (key->value->encoding == OBJ_ENCODING_LISTPACK) {
+        if (key->u.zset.current == NULL) return NULL;
         unsigned char *eptr, *sptr;
         eptr = key->u.zset.current;
         sds ele = lpGetObject(eptr);
@@ -5241,7 +5254,8 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
         }
         str = createObject(OBJ_STRING, ele);
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zskiplistNode *ln = key->u.zset.current;
+        if (key->u.zset.node == NULL) return NULL;
+        zskiplistNode *ln = key->u.zset.node;
         if (score) *score = ln->score;
         sds ele = zslGetNodeElement(ln);
         str = createStringObject(ele, sdslen(ele));
@@ -5291,24 +5305,21 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
             return 1;
         }
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zskiplistNode *ln = key->u.zset.current, *next = ln->level[0].forward;
-        if (next == NULL) {
+        if (!zslNext(&key->u.zset.iter, &key->u.zset.node)) {
             key->u.zset.er = 1;
             return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueLteMax(next->score, &key->u.zset.rs)) {
+        }
+        /* Check if still within range */
+        if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueLteMax(key->u.zset.node->score, &key->u.zset.rs)) {
+            key->u.zset.er = 1;
+            return 0;
+        } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
+            if (!zslLexValueLteMax(zslGetNodeElement(key->u.zset.node), &key->u.zset.lrs)) {
                 key->u.zset.er = 1;
                 return 0;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueLteMax(zslGetNodeElement(next), &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
             }
-            key->u.zset.current = next;
-            return 1;
         }
+        return 1;
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5353,24 +5364,21 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
             return 1;
         }
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
-        zskiplistNode *ln = key->u.zset.current, *prev = ln->backward;
-        if (prev == NULL) {
+        if (!zslPrev(&key->u.zset.iter, &key->u.zset.node)) {
             key->u.zset.er = 1;
             return 0;
-        } else {
-            /* Are we still within the range? */
-            if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueGteMin(prev->score, &key->u.zset.rs)) {
+        }
+        /* Check if still within range */
+        if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_SCORE && !zslValueGteMin(key->u.zset.node->score, &key->u.zset.rs)) {
+            key->u.zset.er = 1;
+            return 0;
+        } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
+            if (!zslLexValueGteMin(zslGetNodeElement(key->u.zset.node), &key->u.zset.lrs)) {
                 key->u.zset.er = 1;
                 return 0;
-            } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueGteMin(zslGetNodeElement(prev), &key->u.zset.lrs)) {
-                    key->u.zset.er = 1;
-                    return 0;
-                }
             }
-            key->u.zset.current = prev;
-            return 1;
         }
+        return 1;
     } else {
         serverPanic("Unsupported zset encoding");
     }

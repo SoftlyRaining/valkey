@@ -1244,14 +1244,15 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             hashtable *ht = ((zset *)objectGetVal(o))->ht;
             zskiplist *zsl = ((zset *)objectGetVal(o))->zsl;
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            zskiplistNode *znode = zheader->level[0].forward;
+            zskiplistIterator iter;
+            zskiplistNode *znode;
             asize += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(ht);
-            while (znode != NULL && samples < sample_size) {
+            zslInitIterator(&iter, zsl);
+            while (samples < sample_size && zslNext(&iter, &znode)) {
                 elesize += zmalloc_size(znode);
                 samples++;
-                znode = znode->level[0].forward;
             }
+            zslResetIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
         } else {
             serverPanic("Unknown sorted set encoding");

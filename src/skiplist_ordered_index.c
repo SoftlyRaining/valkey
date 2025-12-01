@@ -28,25 +28,31 @@ static unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexPositi
 }
 
 static unsigned long skiplistLength(OrderedIndex *idx) {
-    return ((zskiplist *)idx)->length;
+    return zslGetLength((zskiplist *)idx);
 }
 
-static OrderedIndexPosition *skiplistFirst(OrderedIndex *idx) {
-    zskiplist *zsl = (zskiplist *)idx;
-    return (OrderedIndexPosition *)zsl->header->level[0].forward;
+static void skiplistInitIterator(OrderedIndexIterator *iter, OrderedIndex *idx) {
+    zslInitIterator((zskiplistIterator *)iter, (zskiplist *)idx);
 }
 
-static OrderedIndexPosition *skiplistNext(OrderedIndexPosition *node) {
-    zskiplistNode *znode = (zskiplistNode *)node;
-    return (OrderedIndexPosition *)znode->level[0].forward;
+static void skiplistResetIterator(OrderedIndexIterator *iter) {
+    zslResetIterator((zskiplistIterator *)iter);
 }
 
-static OrderedIndexPosition *skiplistLast(OrderedIndex *idx) {
-    return (OrderedIndexPosition *)((zskiplist *)idx)->tail;
+static bool skiplistNext(OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+    return zslNext((zskiplistIterator *)iter, (zskiplistNode **)pos);
 }
 
-static OrderedIndexPosition *skiplistPrev(OrderedIndexPosition *node) {
-    return (OrderedIndexPosition *)((zskiplistNode *)node)->backward;
+static bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+    return zslPrev((zskiplistIterator *)iter, (zskiplistNode **)pos);
+}
+
+static void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
+    zslSeekToRank((zskiplistIterator *)iter, rank);
+}
+
+static void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
+    zslSeekToScoreRange((zskiplistIterator *)iter, min, max, min_ex, max_ex, offset);
 }
 
 static void skiplistGetElementRaw(const OrderedIndexPosition *node, const char **ptr, size_t *len) {
@@ -74,11 +80,6 @@ static unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long 
     return zslDeleteRangeByRank((zskiplist *)idx, start, end, NULL);
 }
 
-static OrderedIndexPosition *skiplistFindNthInRange(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, long n) {
-    zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
-    return (OrderedIndexPosition *)zslNthInRange((zskiplist *)idx, &range, n, NULL);
-}
-
 /* Skiplist implementation ops table */
 const OrderedIndexOps skiplistOrderedIndexOps = {
     .create = skiplistCreate,
@@ -88,14 +89,15 @@ const OrderedIndexOps skiplistOrderedIndexOps = {
     .get_by_rank = skiplistGetByRank,
     .get_rank = skiplistGetRank,
     .length = skiplistLength,
-    .first = skiplistFirst,
+    .init_iterator = skiplistInitIterator,
+    .reset_iterator = skiplistResetIterator,
     .next = skiplistNext,
-    .last = skiplistLast,
     .prev = skiplistPrev,
+    .seek_to_rank = skiplistSeekToRank,
+    .seek_to_score_range = skiplistSeekToScoreRange,
     .get_element_raw = skiplistGetElementRaw,
     .get_score = skiplistGetScore,
     .update_score = skiplistUpdateScore,
     .delete_range_by_score = skiplistDeleteRangeByScore,
     .delete_range_by_rank = skiplistDeleteRangeByRank,
-    .find_nth_in_range = skiplistFindNthInRange,
 };

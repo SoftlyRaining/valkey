@@ -422,27 +422,29 @@ void sortCommandGeneric(client *c, int readonly) {
         sds sdsele;
         int rangelen = vectorlen;
 
-        /* Check if starting point is trivial, before doing log(N) lookup. */
+        /* Use skiplist iterator for traversal */
+        zskiplistIterator iter;
+        zslInitIterator(&iter, zsl);
+
         if (desc) {
             long zsetlen = hashtableSize(((zset *)objectGetVal(sortval))->ht);
-
-            ln = zslGetTail(zsl);
-            if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
+            unsigned long rank = (start > 0) ? zsetlen - start : zsetlen;
+            zslSeekToRank(&iter, rank);
         } else {
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            ln = zheader->level[0].forward;
-            if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
+            unsigned long rank = (start > 0) ? start + 1 : 1;
+            zslSeekToRank(&iter, rank - 1);
         }
 
         while (rangelen--) {
-            serverAssertWithInfo(c, sortval, ln != NULL);
+            bool hasNext = desc ? zslPrev(&iter, &ln) : zslNext(&iter, &ln);
+            serverAssertWithInfo(c, sortval, hasNext);
             sdsele = zslGetNodeElement(ln);
             vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
-            ln = desc ? ln->backward : ln->level[0].forward;
         }
+        zslResetIterator(&iter);
         /* Fix start/end: output code is not aware of this optimization. */
         end -= start;
         start = 0;

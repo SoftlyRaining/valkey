@@ -967,17 +967,23 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
              * element will always be the smaller, so adding to the skiplist
              * will always immediately stop at the head, making the insertion
              * O(1) instead of O(log(N)). */
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
+            zskiplistIterator iter;
+            zslInitIterator(&iter, zsl);
+            zskiplistNode *zn;
+            while (zslPrev(&iter, &zn)) {
                 sds ele = zslGetNodeElement(zn);
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
+                    zslResetIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveBinaryDoubleValue(rdb, zn->score)) == -1) return -1;
+                if ((n = rdbSaveBinaryDoubleValue(rdb, zn->score)) == -1) {
+                    zslResetIterator(&iter);
+                    return -1;
+                }
                 nwritten += n;
-                zn = zn->backward;
             }
+            zslResetIterator(&iter);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
