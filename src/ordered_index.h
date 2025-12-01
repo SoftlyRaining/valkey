@@ -3,9 +3,10 @@
 
 #include "sds.h"
 
-/* Opaque types for ordered index and positions */
+/* Opaque types for ordered index, positions, and iterators */
 typedef struct OrderedIndex OrderedIndex;
 typedef struct OrderedIndexPosition OrderedIndexPosition;
+typedef uint64_t OrderedIndexIterator[2];
 
 /* Operations interface for ordered index implementations */
 typedef struct OrderedIndexOps {
@@ -23,13 +24,15 @@ typedef struct OrderedIndexOps {
     
     /* Metadata */
     unsigned long (*length)(OrderedIndex *idx);
-    
-    /* Iteration */
-    OrderedIndexPosition *(*first)(OrderedIndex *idx);
-    OrderedIndexPosition *(*next)(OrderedIndexPosition *pos);
-    OrderedIndexPosition *(*last)(OrderedIndex *idx);
-    OrderedIndexPosition *(*prev)(OrderedIndexPosition *pos);
-    
+
+    /* Iterator */
+    void (*init_iterator)(OrderedIndexIterator *iter, OrderedIndex *idx);
+    void (*reset_iterator)(OrderedIndexIterator *iter);
+    bool (*next)(OrderedIndexIterator *iter, OrderedIndexPosition **pos);
+    bool (*prev)(OrderedIndexIterator *iter, OrderedIndexPosition **pos);
+    void (*seek_to_rank)(OrderedIndexIterator *iter, unsigned long rank);
+    void (*seek_to_score_range)(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
+
     /* Position access */
     void (*get_element_raw)(const OrderedIndexPosition *pos, const char **ptr, size_t *len);
     double (*get_score)(const OrderedIndexPosition *pos);
@@ -40,9 +43,11 @@ typedef struct OrderedIndexOps {
     /* Range deletion - returns count deleted */
     unsigned long (*delete_range_by_score)(OrderedIndex *idx, double min, double max, int min_ex, int max_ex);
     unsigned long (*delete_range_by_rank)(OrderedIndex *idx, unsigned long start, unsigned long end);
-    
-    /* Range query - find nth element in score range (n can be negative for reverse) */
-    OrderedIndexPosition *(*find_nth_in_range)(OrderedIndex *idx, double min, double max, int min_ex, int max_ex, long n);
+
+    /* TODO: Add interface methods for memory management:
+     * - Memory dismiss (for CoW optimization during fork/snapshot)
+     * - Memory defrag (for active defragmentation when nodes are relocated)
+     * These will eliminate direct access to forward/backward pointers in defrag.c and object.c */
 } OrderedIndexOps;
 
 /* Inline wrappers for performance (compiler can inline these) */
@@ -74,20 +79,28 @@ static inline unsigned long orderedIndexLength(const OrderedIndexOps *ops, Order
     return ops->length(idx);
 }
 
-static inline OrderedIndexPosition *orderedIndexFirst(const OrderedIndexOps *ops, OrderedIndex *idx) {
-    return ops->first(idx);
+static inline void orderedIndexInitIterator(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndex *idx) {
+    ops->init_iterator(iter, idx);
 }
 
-static inline OrderedIndexPosition *orderedIndexNext(const OrderedIndexOps *ops, OrderedIndexPosition *pos) {
-    return ops->next(pos);
+static inline void orderedIndexResetIterator(const OrderedIndexOps *ops, OrderedIndexIterator *iter) {
+    ops->reset_iterator(iter);
 }
 
-static inline OrderedIndexPosition *orderedIndexLast(const OrderedIndexOps *ops, OrderedIndex *idx) {
-    return ops->last(idx);
+static inline bool orderedIndexNext(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+    return ops->next(iter, pos);
 }
 
-static inline OrderedIndexPosition *orderedIndexPrev(const OrderedIndexOps *ops, OrderedIndexPosition *pos) {
-    return ops->prev(pos);
+static inline bool orderedIndexPrev(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+    return ops->prev(iter, pos);
+}
+
+static inline void orderedIndexSeekToRank(const OrderedIndexOps *ops, OrderedIndexIterator *iter, unsigned long rank) {
+    ops->seek_to_rank(iter, rank);
+}
+
+static inline void orderedIndexSeekToScoreRange(const OrderedIndexOps *ops, OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
+    ops->seek_to_score_range(iter, min, max, min_ex, max_ex, offset);
 }
 
 static inline void orderedIndexGetElementRaw(const OrderedIndexOps *ops, const OrderedIndexPosition *pos, const char **ptr, size_t *len) {
@@ -108,10 +121,6 @@ static inline unsigned long orderedIndexDeleteRangeByScore(const OrderedIndexOps
 
 static inline unsigned long orderedIndexDeleteRangeByRank(const OrderedIndexOps *ops, OrderedIndex *idx, unsigned long start, unsigned long end) {
     return ops->delete_range_by_rank(idx, start, end);
-}
-
-static inline OrderedIndexPosition *orderedIndexFindNthInRange(const OrderedIndexOps *ops, OrderedIndex *idx, double min, double max, int min_ex, int max_ex, long n) {
-    return ops->find_nth_in_range(idx, min, max, min_ex, max_ex, n);
 }
 
 /* Available implementations */

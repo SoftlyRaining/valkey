@@ -618,6 +618,128 @@ zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
     return zslGetElementByRankFromNode(zslGetHeader(zsl), zslGetHeight(zsl) - 1, rank);
 }
 
+/*-----------------------------------------------------------------------------
+ * Skiplist iterator
+ *----------------------------------------------------------------------------*/
+
+/* Internal iterator structure */
+typedef struct {
+    zskiplist *zsl;      /* The skiplist being iterated */
+    zskiplistNode *node; /* Current node (NULL before first call) */
+} zslIter;
+
+static_assert(sizeof(zskiplistIterator) >= sizeof(zslIter), "zskiplistIterator must be large enough to hold zslIter");
+
+/* Helper macros to convert between opaque and internal types */
+#define zslIterFromOpaque(iter) ((zslIter *)(iter))
+#define zslIterToOpaque(iter) ((zskiplistIterator *)(iter))
+
+/* Initialize a stack-allocated iterator */
+void zslInitIterator(zskiplistIterator *iterator, zskiplist *zsl) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    iter->zsl = zsl;
+    iter->node = NULL;
+}
+
+/* Reset a stack-allocated iterator */
+void zslResetIterator(zskiplistIterator *iterator) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    iter->zsl = NULL;
+    iter->node = NULL;
+}
+
+/* Allocate and initialize an iterator (heap-allocated) */
+zskiplistIterator *zslCreateIterator(zskiplist *zsl) {
+    zslIter *iter = zmalloc(sizeof(*iter));
+    zskiplistIterator *opaque = zslIterToOpaque(iter);
+    zslInitIterator(opaque, zsl);
+    return opaque;
+}
+
+/* Reset and free a heap-allocated iterator */
+void zslReleaseIterator(zskiplistIterator *iterator) {
+    zslResetIterator(iterator);
+    zslIter *iter = zslIterFromOpaque(iterator);
+    zfree(iter);
+}
+
+/* Get the next node (forward direction)
+ * Returns the node at the current iterator position and advances the iterator.
+ * For the "between items" mental model: if positioned between N and N+1,
+ * this returns N+1 and positions between N+1 and N+2. */
+bool zslNext(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return false;
+
+    if (iter->node == NULL) {
+        /* First call - start from head */
+        iter->node = zslGetHeader(iter->zsl)->level[0].forward;
+    } else {
+        iter->node = iter->node->level[0].forward;
+    }
+    if (iter->node == NULL) {
+        iter->zsl = NULL; /* reached end - invalidate iterator */
+        return false;
+    } else {
+        *nodeptr = iter->node;
+        return true;
+    }
+}
+
+/* Get the previous node (backward direction)
+ * Returns the node at the current iterator position and moves backward.
+ * For the "between items" mental model: if positioned between N and N+1,
+ * this returns N and positions between N-1 and N. */
+bool zslPrev(zskiplistIterator *iterator, zskiplistNode **nodeptr) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return false;
+    if (iter->node == zslGetHeader(iter->zsl)) {
+        iter->zsl = NULL;
+        return false;
+    }
+
+    if (iter->node == NULL) {
+        /* First call - start from tail */
+        iter->node = zslGetTail(iter->zsl);
+    }
+
+    *nodeptr = iter->node;
+    iter->node = iter->node->backward;
+    if (iter->node == zslGetHeader(iter->zsl) || iter->node == NULL) iter->zsl = NULL;
+    return true;
+}
+
+/* Seek to rank position. The mental model is that the iterator is positioned
+ * "between" ranks. Seeking to rank N positions the iterator at N.5:
+ * - next() will return rank N+1
+ * - prev() will return rank N
+ * Rank is 1-based. */
+void zslSeekToRank(zskiplistIterator *iterator, unsigned long rank) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return;
+    if (rank == 0)
+        iter->node = zslGetHeader(iter->zsl);
+    else
+        iter->node = zslGetElementByRank(iter->zsl, rank);
+}
+
+/* Seek to a position within a score range with offset.
+ * min/max: score range bounds
+ * min_ex/max_ex: 1 for exclusive bounds, 0 for inclusive
+ * offset: 0-based position within range (negative counts from end) */
+void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset) {
+    zslIter *iter = zslIterFromOpaque(iterator);
+    if (iter->zsl == NULL) return;
+    zrangespec range = {.min = min, .max = max, .minex = min_ex, .maxex = max_ex};
+    zskiplistNode *node = zslNthInRange(iter->zsl, &range, offset, NULL);
+    if (node == NULL) {
+        iter->node = NULL;
+        iter->zsl = NULL;
+        return;
+    }
+    iter->node = node->backward;
+}
+
 /* Populate the rangespec according to the objects min and max. */
 static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
     char *eptr;

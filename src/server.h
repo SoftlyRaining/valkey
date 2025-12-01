@@ -1517,6 +1517,10 @@ typedef struct zset {
     zskiplist *zsl;
 } zset;
 
+/* Skiplist iterator - opaque type that can be stack allocated.
+ * Size: 2 x uint64_t = 16 bytes (zsl pointer + node pointer) */
+typedef uint64_t zskiplistIterator[2];
+
 typedef struct clientBufferLimitsConfig {
     unsigned long long hard_limit_bytes;
     unsigned long long soft_limit_bytes;
@@ -3383,6 +3387,17 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 sds zslGetNodeElement(const zskiplistNode *x);
+
+/* Skiplist iterator */
+void zslInitIterator(zskiplistIterator *iter, zskiplist *zsl);
+void zslResetIterator(zskiplistIterator *iter);
+zskiplistIterator *zslCreateIterator(zskiplist *zsl);
+void zslReleaseIterator(zskiplistIterator *iter);
+bool zslNext(zskiplistIterator *iter, zskiplistNode **nodeptr);
+bool zslPrev(zskiplistIterator *iter, zskiplistNode **nodeptr);
+void zslSeekToRank(zskiplistIterator *iter, unsigned long rank);
+void zslSeekToScoreRange(zskiplistIterator *iterator, double min, double max, int min_ex, int max_ex, long offset);
+
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);

@@ -310,12 +310,11 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
 
-        if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
-            /* Nothing exists starting at our min.  No results. */
-            return 0;
-        }
+        zskiplistIterator iter;
+        zslInitIterator(&iter, zsl);
+        zslSeekToScoreRange(&iter, range.min, range.max, range.minex, range.maxex, 0);
 
-        while (ln) {
+        while (zslNext(&iter, &ln)) {
             double xy[2];
             double distance = 0;
             /* Abort when the node is no longer in range. */
@@ -326,8 +325,8 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
                 geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
             }
             if (ga->used && limit && ga->used >= limit) break;
-            ln = ln->level[0].forward;
         }
+        zslResetIterator(&iter);
     }
     return ga->used - origincount;
 }
