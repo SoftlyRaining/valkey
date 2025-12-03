@@ -13,7 +13,7 @@ static int test_create_free_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
 
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
@@ -25,7 +25,7 @@ static int test_create_free_generic(const OrderedIndexOps *ops) {
 static int test_insert_single_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     sds ele = sdsnew("test");
-    OrderedIndexPosition *node = orderedIndexInsert(ops, idx, 1.0, ele);
+    OrderedIndexItem *node = orderedIndexInsert(ops, idx, 1.0, ele);
     
     TEST_ASSERT(node != NULL);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 1);
@@ -37,7 +37,7 @@ static int test_insert_single_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(len == 4 && memcmp(ptr, "test", 4) == 0);
 
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(pos == node);
@@ -64,7 +64,7 @@ static int test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
     
     /* Verify forward traversal */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 0; i < 10; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
@@ -102,7 +102,7 @@ static int test_duplicate_scores_generic(const OrderedIndexOps *ops) {
     
     /* Verify lexicographic ordering for same scores */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 0; i < 5; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
@@ -122,7 +122,7 @@ static int test_duplicate_scores_generic(const OrderedIndexOps *ops) {
 
 static int test_rank_operations_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
-    OrderedIndexPosition *nodes[10];
+    OrderedIndexItem *nodes[10];
     
     /* Insert 10 elements */
     for (int i = 0; i < 10; i++) {
@@ -141,7 +141,7 @@ static int test_rank_operations_generic(const OrderedIndexOps *ops) {
     
     /* Test get_by_rank */
     for (int i = 0; i < 10; i++) {
-        OrderedIndexPosition *node = orderedIndexGetByRank(ops, idx, i + 1);
+        OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, i + 1);
         TEST_ASSERT(node == nodes[i]);
     }
     
@@ -151,7 +151,7 @@ static int test_rank_operations_generic(const OrderedIndexOps *ops) {
 
 static int test_delete_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
-    OrderedIndexPosition *nodes[5];
+    OrderedIndexItem *nodes[5];
     
     /* Insert 5 elements */
     for (int i = 0; i < 5; i++) {
@@ -170,7 +170,7 @@ static int test_delete_generic(const OrderedIndexOps *ops) {
     
     /* Verify remaining elements */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == 0.0);
@@ -193,13 +193,13 @@ static int test_update_score_generic(const OrderedIndexOps *ops) {
     sds ele1 = sdsnew("key1");
     sds ele2 = sdsnew("key2");
     sds ele3 = sdsnew("key3");
-    OrderedIndexPosition *node1 = orderedIndexInsert(ops, idx, 1.0, ele1);
-    OrderedIndexPosition *node2 = orderedIndexInsert(ops, idx, 2.0, ele2);
+    OrderedIndexItem *node1 = orderedIndexInsert(ops, idx, 1.0, ele1);
+    OrderedIndexItem *node2 = orderedIndexInsert(ops, idx, 2.0, ele2);
     orderedIndexInsert(ops, idx, 3.0, ele3);
     sdsfree(ele1); sdsfree(ele2); sdsfree(ele3);
     
     /* Update middle element to move it to end */
-    OrderedIndexPosition *updated = orderedIndexUpdateScore(ops, idx, node2, 4.0);
+    OrderedIndexItem *updated = orderedIndexUpdateScore(ops, idx, node2, 4.0);
     TEST_ASSERT(updated != NULL);
     TEST_ASSERT(orderedIndexGetScore(ops, updated) == 4.0);
     const char *ptr;
@@ -209,7 +209,7 @@ static int test_update_score_generic(const OrderedIndexOps *ops) {
     
     /* Verify order: key1(1.0), key3(3.0), key2(4.0) */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
@@ -248,7 +248,7 @@ static int test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
     
     /* Verify remaining: 0,1,2,7,8,9 */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 0; i < 3; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
@@ -288,14 +288,14 @@ static int test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
     
     /* Verify first element is still score 0 */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == 0.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Verify rank 3 is now score 5 (was rank 6) */
-    OrderedIndexPosition *node = orderedIndexGetByRank(ops, idx, 3);
+    OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, 3);
     TEST_ASSERT(orderedIndexGetScore(ops, node) == 5.0);
     
     orderedIndexFree(ops, idx);
@@ -304,7 +304,7 @@ static int test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
 
 static int test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
-    OrderedIndexPosition *nodes[100];
+    OrderedIndexItem *nodes[100];
     
     /* Insert 100 elements */
     for (int i = 0; i < 100; i++) {
@@ -327,7 +327,7 @@ static int test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *o
     
     /* Verify all ranks are correct by forward traversal */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     unsigned long expected_rank = 1;
     while (orderedIndexNext(ops, &iter, &pos)) {
@@ -343,7 +343,7 @@ static int test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *o
 
 static int test_backward_traversal_after_deletions_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
-    OrderedIndexPosition *nodes[20];
+    OrderedIndexItem *nodes[20];
     
     /* Insert 20 elements */
     for (int i = 0; i < 20; i++) {
@@ -361,7 +361,7 @@ static int test_backward_traversal_after_deletions_generic(const OrderedIndexOps
     
     /* Traverse backward and verify prev() pointers work correctly */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     int expected_scores[] = {19, 18, 17, 16, 14, 13, 12, 11, 9, 8, 7, 6, 4, 3, 2, 1, 0};
     int idx_score = 0;
@@ -391,7 +391,7 @@ static int test_lexicographic_edge_cases_generic(const OrderedIndexOps *ops) {
     
     /* Verify lexicographic order: "", "a", "z" */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     const char *ptr;
     size_t len;
     orderedIndexInitIterator(ops, &iter, idx);
@@ -457,7 +457,7 @@ static int test_range_boundary_precision_generic(const OrderedIndexOps *ops) {
     
     /* Verify remaining elements */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == base);
@@ -488,7 +488,7 @@ static int test_special_double_values_generic(const OrderedIndexOps *ops) {
     
     /* Verify ordering: -inf, 0, 1, +inf */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == -INFINITY);
@@ -554,7 +554,7 @@ static int test_edge_cases_generic(const OrderedIndexOps *ops) {
     /* Empty index operations */
     TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(!orderedIndexPrev(ops, &iter, &pos));
@@ -570,18 +570,18 @@ static int test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     
     /* Delete only element */
     sds ele = sdsnew("only");
-    OrderedIndexPosition *node = orderedIndexInsert(ops, idx, 1.0, ele);
+    OrderedIndexItem *node = orderedIndexInsert(ops, idx, 1.0, ele);
     orderedIndexDelete(ops, idx, node);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
     sdsfree(ele);
     
     /* Delete first element */
-    OrderedIndexPosition *nodes[3];
+    OrderedIndexItem *nodes[3];
     for (int i = 0; i < 3; i++) {
         char buf[32];
         snprintf(buf, sizeof(buf), "key%d", i);
@@ -641,8 +641,8 @@ static int test_duplicate_insert_generic(const OrderedIndexOps *ops) {
     /* Insert same score+element twice */
     sds ele1 = sdsnew("duplicate");
     sds ele2 = sdsnew("duplicate");
-    OrderedIndexPosition *node1 = orderedIndexInsert(ops, idx, 1.0, ele1);
-    OrderedIndexPosition *node2 = orderedIndexInsert(ops, idx, 1.0, ele2);
+    OrderedIndexItem *node1 = orderedIndexInsert(ops, idx, 1.0, ele1);
+    OrderedIndexItem *node2 = orderedIndexInsert(ops, idx, 1.0, ele2);
     
     /* Should have 2 nodes (duplicates allowed) */
     TEST_ASSERT(orderedIndexLength(ops, idx) == 2);
@@ -666,11 +666,11 @@ static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     }
     
     /* Update first element to move backward (should stay first) */
-    OrderedIndexPosition *first = orderedIndexGetByRank(ops, idx, 1);
-    OrderedIndexPosition *updated = orderedIndexUpdateScore(ops, idx, first, -1.0);
+    OrderedIndexItem *first = orderedIndexGetByRank(ops, idx, 1);
+    OrderedIndexItem *updated = orderedIndexUpdateScore(ops, idx, first, -1.0);
     TEST_ASSERT(orderedIndexGetScore(ops, updated) == -1.0);
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(pos == updated);
@@ -678,7 +678,7 @@ static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
 
     /* Update last element to move forward */
     unsigned long len = orderedIndexLength(ops, idx);
-    OrderedIndexPosition *last = orderedIndexGetByRank(ops, idx, len);
+    OrderedIndexItem *last = orderedIndexGetByRank(ops, idx, len);
     updated = orderedIndexUpdateScore(ops, idx, last, 10.0);
     TEST_ASSERT(orderedIndexGetScore(ops, updated) == 10.0);
     orderedIndexInitIterator(ops, &iter, idx);
@@ -687,7 +687,7 @@ static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     /* Update middle element to move backward */
-    OrderedIndexPosition *middle = orderedIndexGetByRank(ops, idx, 3);
+    OrderedIndexItem *middle = orderedIndexGetByRank(ops, idx, 3);
     double old_score = orderedIndexGetScore(ops, middle);
     updated = orderedIndexUpdateScore(ops, idx, middle, 0.5);
     TEST_ASSERT(orderedIndexGetScore(ops, updated) == 0.5);
@@ -723,7 +723,7 @@ static int test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     deleted = orderedIndexDeleteRangeByRank(ops, idx, 1, 2);
     TEST_ASSERT(deleted == 2);
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == 2.0);
@@ -757,7 +757,7 @@ static int test_traversal_edge_cases_generic(const OrderedIndexOps *ops) {
 
     /* Iterator should get one element then return false */
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
@@ -919,7 +919,7 @@ static int test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     }
 
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
 
     /* Seek to rank 0 (before first) - next should return rank 1, prev should return NULL */
     orderedIndexInitIterator(ops, &iter, idx);
@@ -988,7 +988,7 @@ static int test_reverse_iteration_generic(const OrderedIndexOps *ops) {
     }
 
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
 
     /* Full reverse traversal */
     orderedIndexInitIterator(ops, &iter, idx);
@@ -1049,7 +1049,7 @@ static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     }
 
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
 
     /* Seek to first in range [2, 6] with offset 0 */
     orderedIndexInitIterator(ops, &iter, idx);
@@ -1134,7 +1134,7 @@ static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops
     }
 
     OrderedIndexIterator iter;
-    OrderedIndexPosition *pos;
+    OrderedIndexItem *pos;
 
     /* Seek to range [3, 7] and iterate forward */
     orderedIndexInitIterator(ops, &iter, idx);

@@ -502,6 +502,7 @@ ENGINE_SERVER_OBJ = \
     eval.o \
     evict.o \
     expire.o \
+	fbtree_ordered_index.o \
     fifo.o \
     functions.o \
     geo.o \

@@ -11,19 +11,19 @@ static void skiplistFree(OrderedIndex *idx) {
     zslFree((zskiplist *)idx);
 }
 
-static OrderedIndexPosition *skiplistInsert(OrderedIndex *idx, double score, const_sds ele) {
-    return (OrderedIndexPosition *)zslInsert((zskiplist *)idx, score, ele);
+static OrderedIndexItem *skiplistInsert(OrderedIndex *idx, double score, const_sds ele) {
+    return (OrderedIndexItem *)zslInsert((zskiplist *)idx, score, ele);
 }
 
-static void skiplistDelete(OrderedIndex *idx, OrderedIndexPosition *node) {
+static void skiplistDelete(OrderedIndex *idx, OrderedIndexItem *node) {
     zslDelete((zskiplist *)idx, (zskiplistNode *)node);
 }
 
-static OrderedIndexPosition *skiplistGetByRank(OrderedIndex *idx, unsigned long rank) {
-    return (OrderedIndexPosition *)zslGetElementByRank((zskiplist *)idx, rank);
+static OrderedIndexItem *skiplistGetByRank(OrderedIndex *idx, unsigned long rank) {
+    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)idx, rank);
 }
 
-static unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexPosition *node) {
+static unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
     return zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
 }
 
@@ -39,11 +39,11 @@ static void skiplistResetIterator(OrderedIndexIterator *iter) {
     zslResetIterator((zskiplistIterator *)iter);
 }
 
-static bool skiplistNext(OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+static bool skiplistNext(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
     return zslNext((zskiplistIterator *)iter, (zskiplistNode **)pos);
 }
 
-static bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+static bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
     return zslPrev((zskiplistIterator *)iter, (zskiplistNode **)pos);
 }
 
@@ -55,20 +55,20 @@ static void skiplistSeekToScoreRange(OrderedIndexIterator *iter, double min, dou
     zslSeekToScoreRange((zskiplistIterator *)iter, min, max, min_ex, max_ex, offset);
 }
 
-static void skiplistGetElementRaw(const OrderedIndexPosition *node, const char **ptr, size_t *len) {
+static void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len) {
     const zskiplistNode *znode = (const zskiplistNode *)node;
     sds ele = zslGetNodeElement(znode);
     *ptr = ele;
     *len = sdslen(ele);
 }
 
-static double skiplistGetScore(const OrderedIndexPosition *node) {
+static double skiplistGetScore(const OrderedIndexItem *node) {
     return ((const zskiplistNode *)node)->score;
 }
 
-static OrderedIndexPosition *skiplistUpdateScore(OrderedIndex *idx, OrderedIndexPosition *node, double newscore) {
+static OrderedIndexItem *skiplistUpdateScore(OrderedIndex *idx, OrderedIndexItem *node, double newscore) {
     zskiplistNode *result = zslUpdateScore((zskiplist *)idx, (zskiplistNode *)node, newscore);
-    return result ? (OrderedIndexPosition *)result : (OrderedIndexPosition *)node;
+    return result ? (OrderedIndexItem *)result : (OrderedIndexItem *)node;
 }
 
 static unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
