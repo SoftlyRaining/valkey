@@ -5,7 +5,7 @@
 
 /* Opaque types for ordered index, positions, and iterators */
 typedef struct OrderedIndex OrderedIndex;
-typedef struct OrderedIndexPosition OrderedIndexPosition;
+typedef struct OrderedIndexItem OrderedIndexItem;
 typedef uint64_t OrderedIndexIterator[2];
 
 /* Operations interface for ordered index implementations */
@@ -15,12 +15,12 @@ typedef struct OrderedIndexOps {
     void (*free)(OrderedIndex *idx);
     
     /* Modification */
-    OrderedIndexPosition *(*insert)(OrderedIndex *idx, double score, const_sds ele);
-    void (*delete)(OrderedIndex *idx, OrderedIndexPosition *pos);
+    OrderedIndexItem *(*insert)(OrderedIndex *idx, double score, const_sds ele);
+    void (*delete)(OrderedIndex *idx, OrderedIndexItem *pos);
     
     /* Query by rank (1-based) */
-    OrderedIndexPosition *(*get_by_rank)(OrderedIndex *idx, unsigned long rank);
-    unsigned long (*get_rank)(OrderedIndex *idx, const OrderedIndexPosition *pos);
+    OrderedIndexItem *(*get_by_rank)(OrderedIndex *idx, unsigned long rank);
+    unsigned long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
     
     /* Metadata */
     unsigned long (*length)(OrderedIndex *idx);
@@ -28,17 +28,17 @@ typedef struct OrderedIndexOps {
     /* Iterator */
     void (*init_iterator)(OrderedIndexIterator *iter, OrderedIndex *idx);
     void (*reset_iterator)(OrderedIndexIterator *iter);
-    bool (*next)(OrderedIndexIterator *iter, OrderedIndexPosition **pos);
-    bool (*prev)(OrderedIndexIterator *iter, OrderedIndexPosition **pos);
+    bool (*next)(OrderedIndexIterator *iter, OrderedIndexItem **pos);
+    bool (*prev)(OrderedIndexIterator *iter, OrderedIndexItem **pos);
     void (*seek_to_rank)(OrderedIndexIterator *iter, unsigned long rank);
     void (*seek_to_score_range)(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
 
     /* Position access */
-    void (*get_element_raw)(const OrderedIndexPosition *pos, const char **ptr, size_t *len);
-    double (*get_score)(const OrderedIndexPosition *pos);
+    void (*get_element_raw)(const OrderedIndexItem *pos, const char **ptr, size_t *len);
+    double (*get_score)(const OrderedIndexItem *pos);
     
     /* Score update - returns new position (may relocate) */
-    OrderedIndexPosition *(*update_score)(OrderedIndex *idx, OrderedIndexPosition *pos, double newscore);
+    OrderedIndexItem *(*update_score)(OrderedIndex *idx, OrderedIndexItem *pos, double newscore);
     
     /* Range deletion - returns count deleted */
     unsigned long (*delete_range_by_score)(OrderedIndex *idx, double min, double max, int min_ex, int max_ex);
@@ -59,19 +59,19 @@ static inline void orderedIndexFree(const OrderedIndexOps *ops, OrderedIndex *id
     ops->free(idx);
 }
 
-static inline OrderedIndexPosition *orderedIndexInsert(const OrderedIndexOps *ops, OrderedIndex *idx, double score, const_sds ele) {
+static inline OrderedIndexItem *orderedIndexInsert(const OrderedIndexOps *ops, OrderedIndex *idx, double score, const_sds ele) {
     return ops->insert(idx, score, ele);
 }
 
-static inline void orderedIndexDelete(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexPosition *pos) {
+static inline void orderedIndexDelete(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos) {
     ops->delete(idx, pos);
 }
 
-static inline OrderedIndexPosition *orderedIndexGetByRank(const OrderedIndexOps *ops, OrderedIndex *idx, unsigned long rank) {
+static inline OrderedIndexItem *orderedIndexGetByRank(const OrderedIndexOps *ops, OrderedIndex *idx, unsigned long rank) {
     return ops->get_by_rank(idx, rank);
 }
 
-static inline unsigned long orderedIndexGetRank(const OrderedIndexOps *ops, OrderedIndex *idx, const OrderedIndexPosition *pos) {
+static inline unsigned long orderedIndexGetRank(const OrderedIndexOps *ops, OrderedIndex *idx, const OrderedIndexItem *pos) {
     return ops->get_rank(idx, pos);
 }
 
@@ -87,11 +87,11 @@ static inline void orderedIndexResetIterator(const OrderedIndexOps *ops, Ordered
     ops->reset_iterator(iter);
 }
 
-static inline bool orderedIndexNext(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+static inline bool orderedIndexNext(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndexItem **pos) {
     return ops->next(iter, pos);
 }
 
-static inline bool orderedIndexPrev(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndexPosition **pos) {
+static inline bool orderedIndexPrev(const OrderedIndexOps *ops, OrderedIndexIterator *iter, OrderedIndexItem **pos) {
     return ops->prev(iter, pos);
 }
 
@@ -103,15 +103,15 @@ static inline void orderedIndexSeekToScoreRange(const OrderedIndexOps *ops, Orde
     ops->seek_to_score_range(iter, min, max, min_ex, max_ex, offset);
 }
 
-static inline void orderedIndexGetElementRaw(const OrderedIndexOps *ops, const OrderedIndexPosition *pos, const char **ptr, size_t *len) {
+static inline void orderedIndexGetElementRaw(const OrderedIndexOps *ops, const OrderedIndexItem *pos, const char **ptr, size_t *len) {
     ops->get_element_raw(pos, ptr, len);
 }
 
-static inline double orderedIndexGetScore(const OrderedIndexOps *ops, const OrderedIndexPosition *pos) {
+static inline double orderedIndexGetScore(const OrderedIndexOps *ops, const OrderedIndexItem *pos) {
     return ops->get_score(pos);
 }
 
-static inline OrderedIndexPosition *orderedIndexUpdateScore(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexPosition *pos, double newscore) {
+static inline OrderedIndexItem *orderedIndexUpdateScore(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
     return ops->update_score(idx, pos, newscore);
 }
 
