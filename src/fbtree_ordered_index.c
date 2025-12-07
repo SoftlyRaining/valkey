@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include "fbtree_ordered_index.h"
 #include "ordered_index.h"
 #include "serverassert.h"
 #include "zmalloc.h"
@@ -15,11 +16,7 @@
 
 #define NODE_SIZE 64
 #define FEATURE_SIZE 4
-
-typedef struct static_string {
-    size_t len;
-    const char buf[];
-} static_string; 
+// TODO if feature_size is 4B, we could copy/compare/etc as 32-bit words for speed
 
 struct nodeFlags {
     uint8_t is_ordered : 1;
@@ -46,25 +43,33 @@ typedef struct {
 typedef struct leafNode {
     struct nodeFlags flags;
     uint64_t presence_bitmap;
-    char *high_key;
-    struct leftNode *prev;
+    static_string *high_key;
+    struct leafNode *prev;
     struct leafNode *next;
     // char tags[NODE_SIZE]; // TODO add leaf hash tag stuff
     static_string *values[NODE_SIZE];
 } leafNode;
 static_assert(NODE_SIZE <= 64, "NODE_SIZE must be <= 64 to fit in presence_bitmap");
 
-typedef struct {
+struct fbtreeIndex {
     node *root;
     unsigned long length;
-} fbtreeIndex;
+};
 
 typedef struct {
+    fbtreeIndex *fbt;
     leafNode *current_leaf;
     uint8_t current_index;
     uint8_t leaf_count;
-} fbtreeIterator;
-static_assert(sizeof(OrderedIndexIterator) >= sizeof(fbtreeIterator), "Iterator size");
+} iter;
+
+static_assert(sizeof(fbtreeIterator) >= sizeof(iter), "Opaque iterator size check");
+static_assert(sizeof(OrderedIndexIterator) >= sizeof(iter), "Opaque iterator size check");
+
+/* Conversion from user-facing opaque iterator type to internal struct */
+static inline iter *iteratorFromOpaque(fbtreeIterator *iterator) {
+    return (iter *)(void *)iterator;
+}
 
 static_string *staticStringCopy(const static_string* src) {
     size_t data_len = sizeof(static_string) + src->len;
@@ -116,6 +121,7 @@ static void freeNodeRecursive(node *n) {
                 zfree(leaf->values[i]);
             }
         }
+        if (leaf->high_key) zfree(leaf->high_key);
         zfree(leaf);
     } else {
         innerNode *inner = (innerNode *)n;
@@ -141,6 +147,38 @@ static inline int compareStrings(const static_string *a, const static_string *b)
     if (cmp != 0) return cmp;
     /* Shorter string comes first if prefixes match */
     return (a->len < b->len) ? -1 : (a->len > b->len) ? 1 : 0;
+}
+
+static void innerNodeInsert(innerNode *inner, node *child) {
+    assert(inner->num_anchor_keys < NODE_SIZE);
+
+    /* get feature value for new child */
+    char child_feature[FEATURE_SIZE];
+    if (child->flags.is_leaf) {
+        leafNode *child_leaf = (leafNode *)child;
+        if (child_leaf->high_key->len < FEATURE_SIZE) {
+            memset(child_feature, 0, FEATURE_SIZE);
+            memcpy(child_feature, child_leaf->high_key->buf, child_leaf->high_key->len);
+        } else {
+            memcpy(child_feature, child_leaf->high_key->buf, FEATURE_SIZE);
+        }
+    } else {
+        /* get feature from inner node */
+        assert(false); // TODO implement
+    }
+
+    /* insert new child node */
+    // TODO if features are not sufficient to differentiate, need to do binary search and access child data for full comparison
+    int i = inner->num_anchor_keys;
+    while (i > 0 && memcmp(child_feature, inner->features[i - 1], FEATURE_SIZE) < 0) {
+        memcpy(inner->features[i], inner->features[i - 1], FEATURE_SIZE);
+        inner->children[i] = inner->children[i - 1];
+        i--;
+    }
+    memcpy(inner->features[i], child_feature, FEATURE_SIZE);
+    inner->children[i] = child;
+    inner->num_anchor_keys++;
+    // TODO should we update our max feature with our parent node?
 }
 
 static void leafNodeEnsureSort(leafNode *leaf) {
@@ -181,6 +219,7 @@ static void leafNodeEnsureSort(leafNode *leaf) {
 }
 
 static void leafNodeInsert(leafNode *leaf, const static_string *string) {
+    /* We assume here there is capacity to insert without splitting */
     assert(leaf->presence_bitmap != ~0ULL);
 
     if (leaf->flags.is_ordered) {
@@ -203,27 +242,85 @@ static void leafNodeInsert(leafNode *leaf, const static_string *string) {
         /* Insert at position */
         leaf->values[left] = staticStringCopy(string);
         leaf->presence_bitmap = (1ULL << (count + 1)) - 1;
+
+        /* Update high_key if inserting at the end (new maximum) */
+        if (left == count) {
+            if (leaf->high_key) zfree(leaf->high_key);
+            leaf->high_key = staticStringCopy(string);
+        }
     } else {
         /* Unordered: find first empty slot */
         int slot = __builtin_ctzll(~leaf->presence_bitmap);
         leaf->values[slot] = staticStringCopy(string);
         leaf->presence_bitmap |= (1ULL << slot);
+
+        /* Update high_key if this is larger than current high_key */
+        if (!leaf->high_key || compareStrings(string, (static_string *)leaf->high_key) > 0) {
+            if (leaf->high_key) zfree(leaf->high_key);
+            leaf->high_key = staticStringCopy(string);
+        }
+    }
+}
+
+static node *leafNodeSplit(leafNode *left_leaf, const static_string *string) {
+    leafNodeEnsureSort(left_leaf);
+    assert(left_leaf->presence_bitmap == ~0ULL);
+    const size_t num_left = NODE_SIZE / 2;
+    const size_t num_right = NODE_SIZE - num_left; /* needed if we ever made NODE_SIZE odd */
+
+    /* Create new leaf, insert to right in doubly linked list */
+    leafNode *right_leaf = leafNodeCreate();
+    right_leaf->flags.is_ordered = 1;
+    right_leaf->prev = left_leaf;
+    right_leaf->next = left_leaf->next;
+    left_leaf->next = right_leaf;
+    if (right_leaf->next) right_leaf->next->prev = right_leaf;
+
+    /* Move second half of elements to new leaf */
+    memcpy(right_leaf->values, &left_leaf->values[num_left], num_right * sizeof(static_string *));
+    left_leaf->presence_bitmap = (1ULL << num_left) - 1;
+    right_leaf->presence_bitmap = (1ULL << num_right) - 1;
+
+    /* Update high keys */
+    right_leaf->high_key = left_leaf->high_key;
+    left_leaf->high_key = staticStringCopy(left_leaf->values[num_left - 1]);
+
+    /* Insert string into appropriate leaf */
+    if (compareStrings(string, left_leaf->high_key) <= 0) {
+        leafNodeInsert(left_leaf, string);
+    } else {
+        leafNodeInsert(right_leaf, string);
+    }
+
+    return (node *)right_leaf;
+}
+
+static node *subtreeInsert(node *n, const static_string *string) {
+    assert(n);
+    if (n->flags.is_leaf) {
+        leafNode *leaf = (leafNode *)n;
+        if (leaf->presence_bitmap == ~0ULL) {
+            return leafNodeSplit(leaf, string);
+        } else {
+            leafNodeInsert(leaf, string);
+            return NULL;
+        }
+    } else {
+        /* inner node - find correct child for insert */
+        assert(false); // TODO implement multi-level insert
     }
 }
 
 void fbtreeInsert(fbtreeIndex *fbt, static_string *string) {
-    if (fbt->root == NULL) {
-        fbt->root = (node *)leafNodeCreate();
+    if (fbt->root == NULL) fbt->root = (node *)leafNodeCreate();
+
+    node *new_child = subtreeInsert(fbt->root, string);
+    if (new_child) {
+        innerNode *new_root = innerNodeCreate();
+        innerNodeInsert(new_root, fbt->root);
+        innerNodeInsert(new_root, new_child);
+        fbt->root = (node *)new_root;
     }
-
-    node *current = fbt->root;
-    assert(current->flags.is_leaf); // TODO handle multi-level trees
-
-    leafNode *leaf = (leafNode *)current;
-    
-    assert(leaf->presence_bitmap != ~0ULL); // TODO handle leaf splits
-
-    leafNodeInsert(leaf, string);
     fbt->length++;
 }
 
@@ -283,56 +380,93 @@ unsigned long fbtreeLength(fbtreeIndex *fbt) {
     return fbt->length;
 }
 
-void fbtreeResetIterator(fbtreeIterator *it) {
+void fbtreeResetIterator(fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    it->fbt = NULL;
     it->current_leaf = NULL;
     it->current_index = 0;
     it->leaf_count = 0;
 }
 
-void fbtreeInitIterator(fbtreeIterator *it, fbtreeIndex *fbt) {
-    if (!fbt->root) {
-        fbtreeResetIterator(it);
-        return;
-    }
-
-    assert(fbt->root->flags.is_leaf); // TODO: implement multi-level trees, traverse to first leaf
-
-    leafNode *leaf = (leafNode *)fbt->root;
-    leafNodeEnsureSort(leaf);
-    it->current_leaf = leaf;
-    it->current_index = 0;
-    it->leaf_count = __builtin_popcountll(leaf->presence_bitmap);
-}
-
-bool fbtreeNext(fbtreeIterator *it, static_string **pos) {
-    if (!it->current_leaf) return false;
-    
-    while (it->current_leaf) {
-        while (it->current_index < NODE_SIZE) {
-            if (it->current_leaf->presence_bitmap & (1ULL << it->current_index)) {
-                *pos = it->current_leaf->values[it->current_index];
-                it->current_index++;
-                return true;
-            }
-            it->current_index++;
-        }
-        it->current_leaf = it->current_leaf->next;
-        if (it->current_leaf) {
-            leafNodeEnsureSort(it->current_leaf);
+static void iteratorSetNode(iter *it, leafNode *leaf, bool last_child) {
+    if (!leaf) {
+        it->fbt = NULL;
+        it->current_leaf = NULL;
+        it->current_index = 0;
+        it->leaf_count = 0;
+    } else {
+        leafNodeEnsureSort(leaf);
+        it->current_leaf = leaf;
+        it->leaf_count = __builtin_popcountll(leaf->presence_bitmap);
+        if (last_child)
+            it->current_index = it->leaf_count;
+        else
             it->current_index = 0;
+    }
+}
+
+void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!fbt->root) {
+        it->fbt = NULL;
+    } else {
+        it->fbt = fbt;
+    }
+    it->current_leaf = NULL;
+    it->current_index = 0;
+    it->leaf_count = 0;
+}
+
+bool fbtreeNext(fbtreeIterator *iterator, static_string **pos) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt) return false;
+    if (!it->current_leaf) {
+        /* This is the first call - start at first item */
+        node *first_node = it->fbt->root;
+        while (!first_node->flags.is_leaf) {
+            first_node = ((innerNode *)first_node)->children[0];
         }
+        iteratorSetNode(it, (leafNode *)first_node, false);
+    }
+
+    while (it->current_leaf) {
+        if (it->current_index < it->leaf_count) {
+            *pos = it->current_leaf->values[it->current_index];
+            it->current_index++;
+            return true;
+        }
+        iteratorSetNode(it, it->current_leaf->next, false);
     }
     return false;
 }
 
-bool fbtreePrev(fbtreeIterator *it, static_string **pos) {
-    UNUSED(it); UNUSED(pos);
-    assert(false); // TODO: implement backward iteration
+bool fbtreePrev(fbtreeIterator *iterator, static_string **pos) {
+    iter *it = iteratorFromOpaque(iterator);
+    if (!it->fbt) return false;
+    if (!it->current_leaf) {
+        /* This is the first call - start at last item */
+        node *last_node = it->fbt->root;
+        while (!last_node->flags.is_leaf) {
+            innerNode *inner = (innerNode *)last_node;
+            last_node = inner->children[inner->num_anchor_keys - 1];
+        }
+        iteratorSetNode(it, (leafNode *)last_node, true);
+    }
+
+    while (it->current_leaf) {
+        if (it->current_index > 0) {
+            it->current_index--;
+            *pos = it->current_leaf->values[it->current_index];
+            return true;
+        }
+        iteratorSetNode(it, it->current_leaf->prev, true);
+    }
     return false;
 }
 
-void fbtreeSeekToRank(fbtreeIterator *it, unsigned long rank) {
-    UNUSED(it); UNUSED(rank);
+void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
+    UNUSED(iterator);
+    UNUSED(rank);
 }
 
 static void fbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {

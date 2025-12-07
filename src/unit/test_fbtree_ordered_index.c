@@ -173,18 +173,18 @@ int test_fbtree_iterator_max(int argc, char **argv, int flags) {
     fbtreeIndex *fbt = fbtreeCreate();
     
     char buf[8];
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 65; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         static_string *str = createString(buf);
         fbtreeInsert(fbt, str);
         zfree(str);
     }
-    
+
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     static_string *pos;
-    
-    for (int i = 0; i < 64; i++) {
+
+    for (int i = 0; i < 65; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         TEST_ASSERT(fbtreeNext(&it, &pos));
         TEST_ASSERT(pos->len == 4);
@@ -203,18 +203,18 @@ int test_fbtree_iterator_reverse_insert(int argc, char **argv, int flags) {
     fbtreeIndex *fbt = fbtreeCreate();
     
     char buf[8];
-    for (int i = 63; i >= 0; i--) {
+    for (int i = 64; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         static_string *str = createString(buf);
         fbtreeInsert(fbt, str);
         zfree(str);
     }
-    
+
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     static_string *pos;
-    
-    for (int i = 0; i < 64; i++) {
+
+    for (int i = 0; i < 65; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
         TEST_ASSERT(fbtreeNext(&it, &pos));
         TEST_ASSERT(pos->len == 4);
@@ -458,6 +458,191 @@ int test_fbtree_ordered_insert_boundaries(int argc, char **argv, int flags) {
     TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "z", 2) == 0);
     TEST_ASSERT(!fbtreeNext(&it, &pos));
     
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_prev_small(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    const char *strings[] = {"dog", "cat", "ant", "bat"};
+    for (int i = 0; i < 4; i++) {
+        static_string *str = createString(strings[i]);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "dog", 4) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "cat", 4) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "bat", 4) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "ant", 4) == 0);
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_prev_max(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    char buf[8];
+    for (int i = 0; i < 65; i++) {
+        snprintf(buf, sizeof(buf), "k%02d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+
+    for (int i = 64; i >= 0; i--) {
+        snprintf(buf, sizeof(buf), "k%02d", i);
+        TEST_ASSERT(fbtreePrev(&it, &pos));
+        TEST_ASSERT(pos->len == 4);
+        TEST_ASSERT(memcmp(pos->buf, buf, 4) == 0);
+    }
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_prev_empty(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_prev_next_mixed(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    const char *strings[] = {"a", "b", "c", "d", "e"};
+    for (int i = 0; i < 5; i++) {
+        static_string *str = createString(strings[i]);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "a", 2) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "b", 2) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "b", 2) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "a", 2) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "a", 2) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "b", 2) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "c", 2) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "c", 2) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "b", 2) == 0);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_prev_single(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    static_string *str = createString("only");
+    fbtreeInsert(fbt, str);
+    zfree(str);
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+
+    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos->buf, "only", 5) == 0);
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_iterator_stays_invalid(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    static_string *str = createString("x");
+    fbtreeInsert(fbt, str);
+    zfree(str);
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeInitIterator(&it, fbt);
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    fbtreeInitIterator(&it, fbt);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeInitIterator(&it, fbt);
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;

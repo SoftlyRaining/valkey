@@ -5,9 +5,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Forward declarations */
-typedef struct OrderedIndex OrderedIndex;
-
 /* Static string type used internally */
 typedef struct static_string {
     size_t len;
@@ -16,11 +13,8 @@ typedef struct static_string {
 
 typedef struct fbtreeIndex fbtreeIndex;
 
-typedef struct fbtreeIterator {
-    void *current_leaf;
-    uint8_t current_index;
-    uint8_t leaf_count;
-} fbtreeIterator;
+/* Opaque iterator type that can be stack allocated */
+typedef uint64_t fbtreeIterator[3];
 
 /* Internal API for testing */
 fbtreeIndex *fbtreeCreate(void);
@@ -28,7 +22,9 @@ void fbtreeInsert(fbtreeIndex *fbt, static_string *string);
 static_string *fbtreeLookup(fbtreeIndex *fbt, const char *key, size_t key_len);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
-void fbtreeInitIterator(fbtreeIterator *it, fbtreeIndex *fbt);
-bool fbtreeNext(fbtreeIterator *it, static_string **pos);
+void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
+void fbtreeResetIterator(fbtreeIterator *iterator);
+bool fbtreeNext(fbtreeIterator *iterator, static_string **pos);
+bool fbtreePrev(fbtreeIterator *iterator, static_string **pos);
 
 #endif /* FBTREE_ORDERED_INDEX_H */

@@ -6,7 +6,7 @@
 /* Opaque types for ordered index, positions, and iterators */
 typedef struct OrderedIndex OrderedIndex;
 typedef struct OrderedIndexItem OrderedIndexItem;
-typedef uint64_t OrderedIndexIterator[2];
+typedef uint64_t OrderedIndexIterator[3];
 
 /* Operations interface for ordered index implementations */
 typedef struct OrderedIndexOps {
