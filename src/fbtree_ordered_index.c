@@ -22,7 +22,6 @@
 struct nodeFlags {
     uint8_t is_ordered : 1;
     uint8_t is_leaf : 1;
-    // TODO: could store is_rightmost when next pointer is last child instead of next sibling 
     // TODO: there are unused bits here, and packing into node structs is inefficient
 };
 
@@ -36,8 +35,7 @@ typedef struct {
     size_t prefix_len;
     char embedded_prefix[EMBED_PREFIX_LEN]; // TODO: use pointer for larger prefix
     uint8_t num_anchor_keys;
-    node *next; /* sibling or last child */
-    char features[FEATURE_SIZE][NODE_SIZE];
+    char features[NODE_SIZE][FEATURE_SIZE]; // TODO: impl SIMD parallel feature comparison: char features[FEATURE_SIZE][NODE_SIZE];
     static_string *anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
     node *children[NODE_SIZE];
 } innerNode;
@@ -93,7 +91,6 @@ static innerNode *innerNodeCreate(void) {
     node->prefix_len = 0;
     memset(node->embedded_prefix, 0, sizeof(node->embedded_prefix));
     node->num_anchor_keys = 0;
-    node->next = NULL;
     memset(node->features, 0, sizeof(node->features));
     memset(node->anchors, 0, sizeof(node->anchors));
     memset(node->children, 0, sizeof(node->children));
@@ -134,7 +131,7 @@ static void freeNodeRecursive(node *n) {
         zfree(leaf);
     } else {
         innerNode *inner = (innerNode *)n;
-        for (int i = 0; i < NODE_SIZE; i++) {
+        for (int i = 0; i < inner->num_anchor_keys; i++) {
             if (inner->children[i] != NULL) {
                 freeNodeRecursive(inner->children[i]);
             }
@@ -159,29 +156,23 @@ static inline int compareStrings(static_string *a, static_string *b) {
 }
 
 /* Extract common prefix between two strings */
-static bool checkNewCommonPrefix(innerNode *inner, static_string *new) {
-    if (inner->num_anchor_keys == 0) return false;
+static size_t getCommonPrefix(innerNode *inner) {
+    if (inner->num_anchor_keys < 2) return false;
 
-    if (inner->num_anchor_keys == 1) {
-        /* about to add second item, so initialize common prefix between them */
-        size_t min_len = (inner->anchors[0]->len < new->len) ? inner->anchors[0]->len : new->len;
-        const char *data = inner->anchors[0]->buf;
-        size_t i = 0;
-        while (i < min_len && data[i] == new->buf[i]) i++;
-        inner->prefix_len = i;
-
-        assert(inner->prefix_len <= EMBED_PREFIX_LEN); // TODO: support for longer prefixes
-        memcpy(inner->embedded_prefix, data, inner->prefix_len);
-        return true;
-    } else {
-        /* compare prefix against new item, update prefix_len */
-        size_t min_len = (inner->prefix_len < new->len) ? inner->prefix_len : new->len;
-        size_t i = 0;
-        while (i < min_len && inner->embedded_prefix[i] == new->buf[i]) i++;
-        bool prefix_length_changed = inner->prefix_len != i;
-        inner->prefix_len = i;
-        return prefix_length_changed;
+    node *first_node = inner->children[0];
+    while (!first_node->flags.is_leaf) {
+        innerNode *inner = (innerNode *)first_node;
+        first_node = inner->children[0];
     }
+    leafNode *first_leaf = (leafNode *)first_node;
+    assert(first_leaf->flags.is_ordered); // TODO: Rain assumption - I haven't properly considered whether we could have more unordered leaves or how that optimization works in all cases...
+    static_string *first = first_leaf->values[0];
+    static_string *last = inner->anchors[inner->num_anchor_keys - 1];
+
+    size_t max_prefix_len = (first->len < last->len) ? first->len : last->len;
+    size_t verified_len = 0;
+    while (verified_len < max_prefix_len && first->buf[verified_len] == last->buf[verified_len]) verified_len++;
+    return verified_len;
 }
 
 static void getStringFeature(static_string *string, size_t prefix_len, char *feature_out) {
@@ -195,22 +186,15 @@ static void recomputeFeatures(innerNode *inner) {
     for (int i = 0; i < inner->num_anchor_keys; i++) {
         assert(inner->anchors[i]->len >= inner->prefix_len);
         size_t feature_size = inner->anchors[i]->len - inner->prefix_len;
-        assert(feature_size <= FEATURE_SIZE); // TODO: larger prefixes
+        if (feature_size > FEATURE_SIZE) feature_size = FEATURE_SIZE;
         memcpy(inner->features[i], &inner->anchors[i]->buf[inner->prefix_len], feature_size);
         memset(inner->features[i] + feature_size, 0, FEATURE_SIZE - feature_size);
     }
 }
 
 /* Insert a child into an inner node in sorted order. Returns true if parent's anchor/feature needs to be updated */
-static insertResult innerNodeInsert(innerNode *parent, const node *child, static_string *child_anchor, size_t insert_index) {
+static bool innerNodeInsert(innerNode *parent, const node *child, static_string *child_anchor, size_t insert_index) {
     assert(parent->num_anchor_keys < NODE_SIZE);
-
-    bool prefix_changed = checkNewCommonPrefix(parent, child_anchor);
-    if (prefix_changed) recomputeFeatures(parent);
-
-    /* get new child's anchor string and feature vector */
-    char child_feature[FEATURE_SIZE];
-    getStringFeature(child_anchor, parent->prefix_len, child_feature);
 
     /* shift higher elements to make space */
     size_t num_to_move = parent->num_anchor_keys - insert_index;
@@ -219,19 +203,67 @@ static insertResult innerNodeInsert(innerNode *parent, const node *child, static
         memmove(&parent->anchors[insert_index + 1], &parent->anchors[insert_index], num_to_move * sizeof(parent->anchors[0]));
         memmove(&parent->children[insert_index + 1], &parent->children[insert_index], num_to_move * sizeof(parent->children[0]));
     }
+
     /* insert child */
-    memcpy(parent->features[insert_index], child_feature, FEATURE_SIZE);
+    getStringFeature(child_anchor, parent->prefix_len, parent->features[insert_index]);
     parent->anchors[insert_index] = (static_string *)child_anchor;
     parent->children[insert_index] = (node *)child;
     parent->num_anchor_keys++;
+
+    /* update prefix - might need to initialize, or common length could become shorter */
+    if (insert_index == 0 || insert_index + 1 == parent->num_anchor_keys) {
+        size_t updated_prefix = getCommonPrefix(parent);
+        if (updated_prefix != parent->prefix_len) {
+            assert(updated_prefix <= EMBED_PREFIX_LEN); // TODO: long prefix support
+            if (updated_prefix > parent->prefix_len) {
+                memcpy(parent->embedded_prefix, parent->anchors[0]->buf, updated_prefix);
+            }
+            parent->prefix_len = updated_prefix;
+            recomputeFeatures(parent);
+        }
+    }
     
-    bool anchor_changed = num_to_move == 0;
-    insertResult result = {
-        .updated_anchor = anchor_changed ? (static_string *)child_anchor : NULL,
-        .new_node = NULL,
-        .new_node_anchor = NULL
-    };
-    return result;
+    bool anchor_changed = (num_to_move == 0);
+    return anchor_changed;
+}
+
+static void maybeGrowCommonPrefix(innerNode *inner) {
+    static_string *first_anchor = inner->anchors[0];
+    static_string *last_anchor = inner->anchors[inner->num_anchor_keys - 1];
+    size_t len = inner->prefix_len;
+    while (first_anchor->len > len && 
+        last_anchor->len > len && 
+        first_anchor->buf[len] == last_anchor->buf[len]) {
+        inner->embedded_prefix[len] = first_anchor->buf[len];
+        len++;
+    }
+    if (inner->prefix_len != len) {
+        inner->prefix_len = len;
+        recomputeFeatures(inner);
+    }
+}
+
+static innerNode *innerNodeSplit(innerNode *left_node) {
+    assert(left_node->num_anchor_keys == NODE_SIZE);
+    innerNode *right_node = innerNodeCreate();
+
+    /* move higher half of elements to right node */
+    const size_t num_left_keys = NODE_SIZE / 2;
+    const size_t num_right_keys = NODE_SIZE - num_left_keys;
+
+    memcpy(right_node->features, left_node->features + num_left_keys, num_right_keys * sizeof(left_node->features[0]));
+    memcpy(right_node->anchors, left_node->anchors + num_left_keys, num_right_keys * sizeof(left_node->anchors[0]));
+    memcpy(right_node->children, left_node->children + num_left_keys, num_right_keys * sizeof(left_node->children[0]));
+
+    right_node->num_anchor_keys = num_right_keys;
+    left_node->num_anchor_keys = num_left_keys;
+
+    /* each covers a smaller range of the dataset, so prefix could be longer now */
+    memcpy(right_node->embedded_prefix, left_node->embedded_prefix, sizeof(left_node->embedded_prefix)); // TODO: only copy size of prefix // TODO: long prefix support
+    right_node->prefix_len = left_node->prefix_len;
+    maybeGrowCommonPrefix(right_node);
+    maybeGrowCommonPrefix(left_node);
+    return right_node;
 }
 
 static void leafNodeEnsureSort(leafNode *leaf) {
@@ -378,7 +410,7 @@ static int findChildIndex(innerNode *inner, static_string *string) {
 
     /* Compute feature for the string */
     char target_feature[FEATURE_SIZE];
-    getStringFeature(string, inner->prefix_len, target_feature);
+    getStringFeature(string, inner->prefix_len, target_feature); // TODO: could use pointer into string if it's long enough
 
     /* Binary search on features */
     // TODO: do linear feature search for branch prediction
@@ -401,6 +433,10 @@ static int findChildIndex(innerNode *inner, static_string *string) {
 }
 
 static insertResult subtreeInsert(node *n, static_string *string) {
+    if (!n) {
+        printf("NULL node\n"); // TODO: debug code for breakpoint
+        assert(false);
+    }
     assert(n);
     if (n->flags.is_leaf) {
         leafNode *leaf = (leafNode *)n;
@@ -416,23 +452,48 @@ static insertResult subtreeInsert(node *n, static_string *string) {
         
         int child_idx = findChildIndex(parent, string);
         if (child_idx == parent->num_anchor_keys) child_idx--; /* If we would insert after last child, insert into last child subtree instead */
-        const bool parent_anchor_changed = (child_idx == parent->num_anchor_keys - 1);
         insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string);
 
         if (child_insert_result.updated_anchor) {
             parent->anchors[child_idx] = child_insert_result.updated_anchor;
+            getStringFeature(child_insert_result.updated_anchor, parent->prefix_len, parent->features[child_idx]);
         }
-        
-        if (child_insert_result.new_node) {
-            /* Child split happened - insert new child after existing index */
-            if (parent->num_anchor_keys == NODE_SIZE) {
-                assert(false); // TODO: implement inner node split
-            } else {
-                return innerNodeInsert(parent, child_insert_result.new_node, child_insert_result.new_node_anchor, child_idx + 1);
-            }
-        } else {
+
+        if (child_insert_result.new_node == NULL) {
+            /* subtree root did not split, so no new child node to deal with */
+            bool parent_anchor_changed = (child_idx == parent->num_anchor_keys - 1);
             insertResult result = {
                 .updated_anchor = parent_anchor_changed ? parent->anchors[child_idx] : NULL,
+            };
+            return result;
+        }
+
+        /* Otherwise, our child split, and we need to insert the new child just after the existing one */
+        size_t new_child_idx = child_idx + 1;
+
+        if (parent->num_anchor_keys == NODE_SIZE) {
+            /* We're full - need to split */
+            innerNode *new_right_parent = innerNodeSplit(parent);
+
+            innerNode *insert_node = parent;
+            bool insert_in_right_parent = child_idx > parent->num_anchor_keys;
+            if (insert_in_right_parent) {
+                insert_node = new_right_parent;
+                new_child_idx -= parent->num_anchor_keys;
+            }
+
+            innerNodeInsert(insert_node, child_insert_result.new_node, child_insert_result.new_node_anchor, new_child_idx);
+            insertResult result = {
+                .updated_anchor = parent->anchors[parent->num_anchor_keys - 1],
+                .new_node = (node *)new_right_parent,
+                .new_node_anchor = new_right_parent->anchors[new_right_parent->num_anchor_keys - 1]
+            };
+            return result;
+        } else {
+            /* We're not full - just insert new child */
+            bool anchor_changed = innerNodeInsert(parent, child_insert_result.new_node, child_insert_result.new_node_anchor, new_child_idx);
+            insertResult result = {
+                .updated_anchor = anchor_changed ? child_insert_result.new_node_anchor : NULL,
             };
             return result;
         }
@@ -638,63 +699,157 @@ static unsigned long fbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long st
 
 /* ========== Debug Functions ========== */
 
-static void printIndent(int depth, bool is_last) {
-    for (int i = 0; i < depth; i++) {
-        printf(i == depth - 1 ? (is_last ? "└─ " : "├─ ") : "│  ");
+static void printBinaryString(const char *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        char c = buf[i];
+        bool printable = (c >= 32 && c < 127);
+        if (printable) {
+            printf("%c", c);
+        } else {
+            printf("\033[2m%02x\033[0m", (unsigned char)c);
+        }
     }
 }
 
-static void printStringPreview(static_string *str, int max_len) {
+static void printStringPreview(static_string *str, size_t skip_prefix_len, size_t max_len) {
     if (!str) {
         printf("(null)");
         return;
     }
-    size_t len = str->len < (size_t)max_len ? str->len : (size_t)max_len;
-    printf("\"");
-    for (size_t i = 0; i < len; i++) {
-        char c = str->buf[i];
-        printf("%c", (c >= 32 && c < 127) ? c : '?');
-    }
+    size_t len = str->len;
+    if (skip_prefix_len > len) return;
+    len -= skip_prefix_len;
+    if (len > max_len) len = max_len;
+    printBinaryString(str->buf + skip_prefix_len, len);
     if (str->len > (size_t)max_len) printf("...");
-    printf("\"");
 }
 
-static void debugPrintNode(node *n, int depth, bool is_last) {
-    if (!n) return;
+static void printColoredBool(bool b) {
+    if (b) printf("\033[32mTrue \033[31m");
+    else printf("False");
+}
+
+bool debugPrintAndValidateNode(node *n, int depth, size_t parent_prefix_len) {
+    if (!n) return true;
+    bool valid = true;
     
     if (n->flags.is_leaf) {
         leafNode *leaf = (leafNode *)n;
         int count = __builtin_popcountll(leaf->presence_bitmap);
-        printIndent(depth, is_last);
-        printf("Leaf (%d items%s)\n", count, leaf->flags.is_ordered ? ", sorted" : "");
-        for (int i = 0; i < count; i++) {
-            for (int j = 0; j <= depth; j++) printf("│  ");
-            printf("  ");
-            printStringPreview(leaf->values[i], 40);
+        printf(" Leaf (%d items%s)", count, leaf->flags.is_ordered ? ", sorted" : ", unordered");
+
+        /* validate high_key value */
+        bool high_key_ok = leaf->high_key != NULL;
+        if (leaf->flags.is_ordered) {
+            if (count > 0) {
+                high_key_ok = compareStrings(leaf->values[count - 1], leaf->high_key) == 0;
+            }
+        } else {
+            static_string *max_item = NULL;
+            int max_index = -1;
+            uint64_t remaining_items = leaf->presence_bitmap;
+            while (remaining_items) {
+                int idx = __builtin_ctzll(remaining_items);
+                remaining_items &= remaining_items - 1;
+                static_string *item = leaf->values[idx];
+                if (!max_item || compareStrings(item, max_item) > 0) {
+                    max_item = item;
+                    max_index = idx;
+                }
+            }
+            if (max_item) {
+                printf(" max_item:%s at index %d", max_item->buf, max_index);
+                high_key_ok = high_key_ok && (compareStrings(max_item, leaf->high_key) == 0);
+            }
+        }
+        if (!high_key_ok) {
+            printf(" \033[31mERROR: bad high_key:");
+            if (!leaf->high_key) {
+                printf("(null)\033[0m\n");
+            } else {
+                printStringPreview(leaf->high_key, parent_prefix_len, 12);
+                printf("\033[0m\n");
+            }
+            valid = false;
+        } else {
+            printf("\n");
+        }
+        
+        int index = 0;
+        const int width_count = 16;
+        for (int row = 0; row < NODE_SIZE/width_count && index < count; row++) {
+            for (int j = 0; j < depth; j++) printf("│  ");
+            printf("├─");
+            for (int col = 0; col < width_count && index < count; col++) {
+                if (col > 0) printf(" ");
+                printStringPreview(leaf->values[row * width_count + col], parent_prefix_len, 12);
+                index++;
+            }
             printf("\n");
         }
     } else {
         innerNode *inner = (innerNode *)n;
-        printIndent(depth, is_last);
-        printf("Inner [prefix=\"");
-        for (size_t i = 0; i < inner->prefix_len; i++) {
-            char c = inner->embedded_prefix[i];
-            printf("%c", (c >= 32 && c < 127) ? c : '?');
+        if (inner->prefix_len < parent_prefix_len) {
+            printf(" Inner \033[31mERROR: shorter prefix (%zu) < (%zu):\"", inner->prefix_len, parent_prefix_len);
+            printBinaryString(inner->embedded_prefix, inner->prefix_len);
+            printf("\"\033[0m");
+            valid = false;
+        } else {
+            printf(" Inner (prefix(%ld)=", inner->prefix_len);
+            printBinaryString(inner->embedded_prefix, inner->prefix_len);
         }
-        printf("\", keys=%d]\n", inner->num_anchor_keys);
+        printf(", keys=%d)\n", inner->num_anchor_keys);
         
         for (int i = 0; i < inner->num_anchor_keys; i++) {
-            debugPrintNode(inner->children[i], depth + 1, i == inner->num_anchor_keys - 1);
+            static_string *anchor = inner->anchors[i];
+            bool prefix_ok = anchor->len >= inner->prefix_len && 
+                           memcmp(anchor->buf, inner->embedded_prefix, inner->prefix_len) == 0;
+            
+            size_t feature_cmp_len = anchor->len - inner->prefix_len;
+            if (feature_cmp_len > FEATURE_SIZE) feature_cmp_len = FEATURE_SIZE;
+            bool feature_ok = memcmp(anchor->buf + inner->prefix_len, inner->features[i], feature_cmp_len) == 0;
+
+            static_string *expected_anchor = NULL;
+            node *child = inner->children[i];
+            if (child->flags.is_leaf) {
+                leafNode *leaf = (leafNode *)child;
+                expected_anchor = leaf->high_key;
+            } else {
+                innerNode *inner_child = (innerNode *)child;
+                expected_anchor = inner_child->anchors[inner_child->num_anchor_keys - 1];
+            }
+            bool anchor_ok = expected_anchor == anchor;
+            
+            valid = valid && prefix_ok && feature_ok && anchor_ok;
+            
+            for (int j = 0; j < depth; j++) printf("│  ");
+            printf("├─[%02d] anchor=", i);
+            printStringPreview(anchor, parent_prefix_len, 20);
+            printf(" feature=");
+            printBinaryString(inner->features[i], FEATURE_SIZE);
+            if (!prefix_ok || !feature_ok || !anchor_ok) {
+                printf(" \033[31m[FAIL: prefix=");
+                printColoredBool(prefix_ok);
+                printf(" feature=");
+                printColoredBool(feature_ok);
+                printf(" anchor=");
+                printColoredBool(anchor_ok);
+                printf("]\033[0m");
+            }
+            bool child_valid = debugPrintAndValidateNode(inner->children[i], depth + 1, inner->prefix_len);
+            valid = valid && child_valid;
         }
     }
+    return valid;
 }
 
-void fbtreeDebugPrint(fbtreeIndex *fbt) {
-    printf("FBTree (length=%lu)\n", fbt->length);
+bool fbtreeDebugPrintAndValidate(fbtreeIndex *fbt) {
+    printf("FBTree (length=%lu)", fbt->length);
     if (!fbt->root) {
-        printf("  (empty)\n");
+        printf(" (empty)\n");
+        return true;
     } else {
-        debugPrintNode(fbt->root, 0, true);
+        return debugPrintAndValidateNode(fbt->root, 0, 0);
     }
 }
 
