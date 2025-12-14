@@ -42,6 +42,7 @@ int test_fbtree_create_and_free(int argc, char **argv, int flags) {
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
     TEST_ASSERT(fbt != NULL);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
@@ -59,6 +60,7 @@ int test_fbtree_insert_and_lookup(int argc, char **argv, int flags) {
     static_string *str = createString("hello");
     fbtreeInsert(fbt, str);
     zfree(str);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     /* Lookup existing string */
     static_string *search_string = createString("hello");
@@ -92,6 +94,7 @@ int test_fbtree_insert_multiple(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     /* Verify all can be found */
     for (int i = 0; i < count; i++) {
@@ -117,6 +120,7 @@ int test_fbtree_empty_lookup(int argc, char **argv, int flags) {
     
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     /* Lookup in empty tree */
     static_string *search_str = createString("anything");
@@ -154,6 +158,7 @@ int test_fbtree_length(int argc, char **argv, int flags) {
     fbtreeInsert(fbt, str3);
     zfree(str3);
     TEST_ASSERT(fbtreeLength(fbt) == 3);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
@@ -171,6 +176,7 @@ int test_fbtree_iterator_small(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -199,6 +205,7 @@ int test_fbtree_iterator_max(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -229,6 +236,7 @@ int test_fbtree_iterator_reverse_insert(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -251,6 +259,7 @@ int test_fbtree_iterator_empty(int argc, char **argv, int flags) {
     UNUSED(argc); UNUSED(argv); UNUSED(flags);
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -273,6 +282,7 @@ int test_fbtree_iterator_reset(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -303,6 +313,7 @@ int test_fbtree_duplicate_insert(int argc, char **argv, int flags) {
     fbtreeInsert(fbt, str2);
     zfree(str2);
     TEST_ASSERT(fbtreeLength(fbt) == 2);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     static_string *search_str = createString("key");
     TEST_ASSERT(fbtreeLookup(fbt, search_str));
@@ -321,6 +332,7 @@ int test_fbtree_empty_string(int argc, char **argv, int flags) {
     static_string *str = createString("");
     fbtreeInsert(fbt, str);
     zfree(str);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     static_string *search_str = createString("");
     TEST_ASSERT(fbtreeLookup(fbt, search_str));
@@ -345,6 +357,7 @@ int test_fbtree_multilevel_reverse_insert(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Verify forward iteration is sorted */
     fbtreeIterator it;
@@ -382,6 +395,7 @@ int test_fbtree_prefix_ordering(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -410,6 +424,7 @@ int test_fbtree_long_strings(int argc, char **argv, int flags) {
     static_string *str = createString(long_str);
     fbtreeInsert(fbt, str);
     zfree(str);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     static_string *search_str = createString(long_str);
     TEST_ASSERT(fbtreeLookup(fbt, search_str));
@@ -431,6 +446,7 @@ int test_fbtree_same_length_ordering(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -473,6 +489,7 @@ int test_fbtree_ordered_insert_after_sort(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     /* Final iteration - verify all sorted */
     fbtreeInitIterator(&it, fbt);
@@ -510,6 +527,7 @@ int test_fbtree_ordered_insert_boundaries(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
     
     fbtreeInitIterator(&it, fbt);
     TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos->buf, "a", 2) == 0);
@@ -536,6 +554,7 @@ int test_fbtree_prev_small(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -566,6 +585,7 @@ int test_fbtree_prev_max(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -590,6 +610,7 @@ int test_fbtree_prev_empty(int argc, char **argv, int flags) {
     UNUSED(flags);
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -614,6 +635,7 @@ int test_fbtree_prev_next_mixed(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -644,6 +666,7 @@ int test_fbtree_prev_single(int argc, char **argv, int flags) {
     static_string *str = createString("only");
     fbtreeInsert(fbt, str);
     zfree(str);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -667,6 +690,7 @@ int test_fbtree_iterator_stays_invalid(int argc, char **argv, int flags) {
     static_string *str = createString("x");
     fbtreeInsert(fbt, str);
     zfree(str);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -721,6 +745,7 @@ int test_fbtree_multilevel_lookup(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Lookup all items in multi-level tree */
     for (int i = 0; i < 65; i++) {
@@ -756,6 +781,7 @@ int test_fbtree_multilevel_forward_iteration(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Forward iteration through all items */
     fbtreeIterator it;
@@ -786,6 +812,7 @@ int test_fbtree_multilevel_backward_iteration(int argc, char **argv, int flags) 
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Backward iteration through all items */
     fbtreeIterator it;
@@ -816,6 +843,7 @@ int test_fbtree_multilevel_mixed_iteration(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 100);
 
@@ -866,6 +894,7 @@ int test_fbtree_multilevel_random_insert(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Verify sorted iteration */
     int expected[] = {0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 66,
@@ -901,6 +930,7 @@ int test_fbtree_multilevel_feature_collision(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Lookup all keys */
     for (int i = 0; i < 12; i++) {
@@ -938,6 +968,7 @@ int test_fbtree_multilevel_across_leaves(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     /* Test iteration crossing leaf boundaries */
     fbtreeIterator it;
@@ -977,6 +1008,7 @@ int test_fbtree_inner_node_split_sequential(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 4200);
 
@@ -1019,6 +1051,7 @@ int test_fbtree_inner_node_split_reverse(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 4200);
 
@@ -1075,6 +1108,7 @@ int test_fbtree_inner_node_split_random(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 5000);
 
@@ -1110,6 +1144,7 @@ int test_fbtree_deep_tree_levels(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 300000);
 
@@ -1200,6 +1235,7 @@ int test_fbtree_deep_tree_mixed_operations(int argc, char **argv, int flags) {
         zfree(str);
     }
     zfree(indices);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 30000);
 
@@ -1277,6 +1313,7 @@ int test_fbtree_inner_node_split_string_patterns(int argc, char **argv, int flag
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 4000);
 
@@ -1350,6 +1387,7 @@ int test_fbtree_inner_node_split_boundaries(int argc, char **argv, int flags) {
     static_string *str = createString("bound_04096");
     fbtreeInsert(fbt, str);
     zfree(str);
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == 4097);
 
@@ -1397,6 +1435,7 @@ int test_fbtree_stress_inner_node_splits(int argc, char **argv, int flags) {
         fbtreeInsert(fbt, str);
         zfree(str);
     }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
 
     TEST_ASSERT(fbtreeLength(fbt) == num_items);
 
@@ -1428,6 +1467,69 @@ int test_fbtree_stress_inner_node_splits(int argc, char **argv, int flags) {
         index++;
     }
     TEST_ASSERT(index == num_items);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+/* Test middle insertion pattern to stress node split boundaries */
+int test_fbtree_middle_insertion_splits(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Always insert in middle of current range to stress split boundaries */
+    char buf[16];
+    int min_val = 0, max_val = 4095;
+    
+    while (min_val <= max_val) {
+        /* insert min val, then insert max val */
+        snprintf(buf, sizeof(buf), "mid_%06d", min_val);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+        min_val++;
+
+        if (min_val > max_val) break;
+        snprintf(buf, sizeof(buf), "mid_%06d", max_val);
+        str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+        max_val--;
+    }
+    TEST_ASSERT(fbtreeDebugPrintAndValidate(fbt, 0));
+
+    TEST_ASSERT(fbtreeLength(fbt) == 4096);
+
+    /* Lookup each inserted item */
+    for (int i = 0; i < 4096; i++) {
+        snprintf(buf, sizeof(buf), "mid_%06d", i);
+        static_string *search_str = createString(buf);
+        TEST_ASSERT(fbtreeLookup(fbt, search_str));
+        zfree(search_str);
+    }
+
+    /* Forward iteration - verify exact values 0-4095 */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+    
+    for (int i = 0; i < 4096; i++) {
+        TEST_ASSERT(fbtreeNext(&it, &pos));
+        snprintf(buf, sizeof(buf), "mid_%06d", i);
+        TEST_ASSERT(memcmp(pos->buf, buf, strlen(buf) + 1) == 0);
+    }
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    /* Reverse iteration - verify exact values 4095-0 */
+    fbtreeInitIterator(&it, fbt);
+    for (int i = 4095; i >= 0; i--) {
+        TEST_ASSERT(fbtreePrev(&it, &pos));
+        snprintf(buf, sizeof(buf), "mid_%06d", i);
+        TEST_ASSERT(memcmp(pos->buf, buf, strlen(buf) + 1) == 0);
+    }
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);

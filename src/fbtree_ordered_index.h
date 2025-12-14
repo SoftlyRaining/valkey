@@ -28,6 +28,6 @@ bool fbtreeNext(fbtreeIterator *iterator, static_string **pos);
 bool fbtreePrev(fbtreeIterator *iterator, static_string **pos);
 
 /* Debug functions */
-bool fbtreeDebugPrintAndValidate(fbtreeIndex *fbt);
+bool fbtreeDebugPrintAndValidate(fbtreeIndex *fbt, bool verbose);
 
 #endif /* FBTREE_ORDERED_INDEX_H */
