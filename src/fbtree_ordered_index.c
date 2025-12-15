@@ -523,9 +523,62 @@ bool fbtreeLookup(fbtreeIndex *fbt, static_string *key) {
     return leafNodeLookup(leaf, key);
 }
 
-static void fbtreeDelete(OrderedIndex *idx, OrderedIndexItem *pos) {
-    UNUSED(idx); UNUSED(pos);
-    assert(false); // TODO: implement delete
+static bool leafNodeDelete(leafNode *leaf, static_string *key) {
+    const int count = __builtin_popcountll(leaf->presence_bitmap);
+    assert(count > 0);
+
+    if (leaf->flags.is_ordered) {
+        int pos = leafNodeBinarySearch(leaf, key);
+        if (pos >= count || compareStrings(leaf->values[pos], key) != 0) return false;
+
+        zfree(leaf->values[pos]);
+
+        /* Shift elements to fill the gap */
+        size_t num_to_shift = count - pos - 1;
+        memmove(&leaf->values[pos], &leaf->values[pos + 1], num_to_shift * sizeof(static_string *));
+
+        /* Update presence bitmap */
+        leaf->presence_bitmap = (1ULL << (count - 1)) - 1;
+
+        /* Update high key if necessary */
+        if (pos + 1 == count) {
+            zfree(leaf->high_key);
+            leaf->high_key = staticStringCopy(leaf->values[count - 2]);
+        }
+        return true;
+    } else {
+        /* Linear scan for unordered nodes */
+        // TODO: only iterate set bits
+        for (int i = 0; i < NODE_SIZE; i++) {
+            if (leaf->presence_bitmap & (1ULL << i)) {
+                static_string *str = leaf->values[i];
+                if (str->len == key->len && memcmp(str->buf, key->buf, key->len) == 0) {
+                    zfree(str);
+                    leaf->presence_bitmap &= ~(1ULL << i);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+}
+
+static bool subtreeDelete(node *n, static_string *key) {
+    if (n->flags.is_leaf) {
+        return leafNodeDelete((leafNode *)n, key);
+        // TODO: handle underflow/merging
+    } else {
+        assert(false); // TODO: implement for inner nodes
+    }
+}
+
+/* Returns false if element was not found and deleted */
+bool fbtreeDelete(fbtreeIndex *fbt, static_string *key) {
+    if (fbt->root == NULL) return false;
+
+    bool deleted = subtreeDelete(fbt->root, key);
+    if (deleted) fbt->length--;
+    return deleted;
 }
 
 static OrderedIndexItem *fbtreeGetByRank(OrderedIndex *idx, unsigned long rank) {
@@ -631,43 +684,6 @@ bool fbtreePrev(fbtreeIterator *iterator, static_string **pos) {
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
     UNUSED(iterator);
     UNUSED(rank);
-}
-
-static OrderedIndexItem *fbtreeScoreEleInsert(OrderedIndex *idx, double score, const_sds ele) {
-    UNUSED(idx); UNUSED(score); UNUSED(ele);
-    assert(false); // TODO: implement insert with score/element
-    return NULL;
-}
-
-static void fbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
-    UNUSED(pos);
-    *ptr = NULL;
-    *len = 0;
-    assert(false); // TODO: pack score and element into binary string and use as key
-}
-
-static double fbtreeGetScore(const OrderedIndexItem *pos) {
-    UNUSED(pos);
-    assert(false); // TODO: pack score and element into binary string and use as key
-    return 0.0;
-}
-
-static OrderedIndexItem *fbtreeUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
-    UNUSED(idx); UNUSED(pos); UNUSED(newscore);
-    assert(false); // TODO: pack score and element into binary string and use as key
-    return NULL;
-}
-
-static unsigned long fbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    UNUSED(idx); UNUSED(min); UNUSED(max); UNUSED(min_ex); UNUSED(max_ex);
-    assert(false); // TODO: pack score and element into binary string and use as key
-    return 0;
-}
-
-static unsigned long fbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    UNUSED(idx); UNUSED(start); UNUSED(end);
-    assert(false); // TODO: implement delete range by rank
-    return 0;
 }
 
 /* ========== Debug Functions ========== */
@@ -822,7 +838,7 @@ bool debugPrintAndValidateNode(node *n, int depth, size_t parent_prefix_len, boo
     return valid;
 }
 
-bool fbtreeDebugPrintAndValidate(fbtreeIndex *fbt, bool verbose) {
+bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
     if (verbose) printf("FBTree (length=%lu)", fbt->length);
     if (!fbt->root) return true;
 
@@ -830,6 +846,49 @@ bool fbtreeDebugPrintAndValidate(fbtreeIndex *fbt, bool verbose) {
 }
 
 /* Wrapper functions for OrderedIndexOps interface */
+
+static OrderedIndexItem *fbtreeScoreEleInsert(OrderedIndex *idx, double score, const_sds ele) {
+    UNUSED(idx); UNUSED(score); UNUSED(ele);
+    assert(false); // TODO: implement insert with score/element
+    return NULL;
+}
+
+void fbtreeDeleteWrapper(OrderedIndex *idx, OrderedIndexItem *pos) {
+    UNUSED(idx); UNUSED(pos);
+    assert(false); // TODO: implement
+}
+
+static void fbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
+    UNUSED(pos);
+    *ptr = NULL;
+    *len = 0;
+    assert(false); // TODO: pack score and element into binary string and use as key
+}
+
+static double fbtreeGetScore(const OrderedIndexItem *pos) {
+    UNUSED(pos);
+    assert(false); // TODO: pack score and element into binary string and use as key
+    return 0.0;
+}
+
+static OrderedIndexItem *fbtreeUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
+    UNUSED(idx); UNUSED(pos); UNUSED(newscore);
+    assert(false); // TODO: pack score and element into binary string and use as key
+    return NULL;
+}
+
+static unsigned long fbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
+    UNUSED(idx); UNUSED(min); UNUSED(max); UNUSED(min_ex); UNUSED(max_ex);
+    assert(false); // TODO: pack score and element into binary string and use as key
+    return 0;
+}
+
+static unsigned long fbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
+    UNUSED(idx); UNUSED(start); UNUSED(end);
+    assert(false); // TODO: implement delete range by rank
+    return 0;
+}
+
 
 static OrderedIndex *fbtreeCreateWrapper(void) {
     return (OrderedIndex *)fbtreeCreate();
@@ -872,7 +931,7 @@ const OrderedIndexOps fbtreeOrderedIndexOps = {
     .create = fbtreeCreateWrapper,
     .free = fbtreeFreeWrapper,
     .insert = fbtreeScoreEleInsert,
-    .delete = fbtreeDelete,
+    .delete = fbtreeDeleteWrapper,
     .get_by_rank = fbtreeGetByRank,
     .get_rank = fbtreeGetRank,
     .length = fbtreeLengthWrapper,
