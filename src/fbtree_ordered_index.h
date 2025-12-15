@@ -20,6 +20,7 @@ typedef uint64_t fbtreeIterator[3];
 fbtreeIndex *fbtreeCreate(void);
 void fbtreeInsert(fbtreeIndex *fbt, static_string *string);
 bool fbtreeLookup(fbtreeIndex *fbt, static_string *key);
+bool fbtreeDelete(fbtreeIndex *fbt, static_string *key);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
@@ -28,6 +29,6 @@ bool fbtreeNext(fbtreeIterator *iterator, static_string **pos);
 bool fbtreePrev(fbtreeIterator *iterator, static_string **pos);
 
 /* Debug functions */
-bool fbtreeDebugPrintAndValidate(fbtreeIndex *fbt, bool verbose);
+bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
 
 #endif /* FBTREE_ORDERED_INDEX_H */
