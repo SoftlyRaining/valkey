@@ -1808,3 +1808,50 @@ int test_fbtree_delete_mixed_order_states(int argc, char **argv, int flags) {
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
+
+/* Test anchor bubble-up when deleting from rightmost leaf */
+int test_fbtree_delete_anchor_bubbleup(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    /* Insert enough items to force splits and create multi-level tree */
+    char buf[16];
+    for (int i = 0; i < 200; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 200);
+    TEST_ASSERT(fbtreeDebugValidate(fbt, 0));
+    
+    /* Delete the maximum key (should trigger anchor updates) */
+    static_string *del_str = createString("key_199");
+    TEST_ASSERT(fbtreeDelete(fbt, del_str));
+    zfree(del_str);
+    TEST_ASSERT(fbtreeLength(fbt) == 199);
+    TEST_ASSERT(fbtreeDebugValidate(fbt, 0));
+    
+    /* Verify tree is still valid and max key is now key_198 */
+    TEST_ASSERT(fbtreeDebugValidate(fbt, 0));
+    static_string *search_str = createString("key_199");
+    TEST_ASSERT(!fbtreeLookup(fbt, search_str));
+    zfree(search_str);
+    
+    search_str = createString("key_198");
+    TEST_ASSERT(fbtreeLookup(fbt, search_str));
+    zfree(search_str);
+    
+    /* Verify iteration still works correctly */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+    int count = 0;
+    while (fbtreePrev(&it, &pos)) count++;
+    TEST_ASSERT(count == 199);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
