@@ -635,8 +635,8 @@ ENGINE_BENCHMARK_OBJ = \
     valkey_strtod.o \
     zmalloc.o
 MICROBENCH_NAME=$(ENGINE_NAME)-microbench$(PROG_SUFFIX)
-MICROBENCH_OBJ=valkey-microbench.o
-MICROBENCH_OBJ+=$(ENGINE_SERVER_OBJ)
+MICROBENCH_SRC = $(wildcard benchmarks/*/*.cpp) $(wildcard benchmarks/*.cpp)
+MICROBENCH_OBJ=$(MICROBENCH_SRC:.cpp=.o)
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
 ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
@@ -752,12 +752,23 @@ $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
 
 # valkey-microbench
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -O3 -Wall
-$(MICROBENCH_NAME): $(MICROBENCH_OBJ)
-	$(CXX) $(FINAL_LDFLAGS) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
+CXXFLAGS ?= -std=c++17 -O3 -Wall -Ibenchmarks
+MICROBENCH_SERVER_OBJ=$(filter-out server.o,$(ENGINE_SERVER_OBJ)) server_nomain.o
+# server object without LTO (to allow main symbol manipulation)
+server_nomain.o: server.c .make-prerequisites
+	$(CC) $(filter-out -flto%,$(FINAL_CFLAGS)) -I. -MMD -o server_nolto.o -c $<
+	objcopy --redefine-sym main=_valkey_main_unused server_nolto.o $@
+	@rm -f server_nolto.o
 
-%.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+$(MICROBENCH_NAME): $(MICROBENCH_OBJ) $(MICROBENCH_SERVER_OBJ)
+	$(CXX) $(filter-out -flto%,$(FINAL_LDFLAGS)) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
+
+# C++ flags for benchmarks (filter out C-specific flags from FINAL_CFLAGS)
+MICROBENCH_CXXFLAGS = -std=c++20 -O3 -Wall -Wno-pedantic -Ibenchmarks
+MICROBENCH_CFLAGS = $(filter-out -std=gnu11 -std=c99 -Wstrict-prototypes -pedantic,$(FINAL_CFLAGS))
+
+benchmarks/%.o: benchmarks/%.cpp .make-prerequisites
+	$(CXX) $(MICROBENCH_CXXFLAGS) $(MICROBENCH_CFLAGS) -I. -c $< -o $@
 
 DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
@@ -786,8 +797,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(MICROBENCH_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
-	rm -f $(DEP)
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(MICROBENCH_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_GTESTS) $(ENGINE_LIB_NAME) benchmarks/*.o benchmarks/*/*.o trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	-(cd modules/lua && $(MAKE) clean)
 
 .PHONY: clean
