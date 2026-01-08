@@ -1,10 +1,18 @@
 #pragma once
 
 #include <cstdlib>
+#include <memory>
+#include <vector>
 
-constexpr size_t megabyte = 1024 * 1024;
-constexpr size_t dataset_size = 450 * megabyte; // 10x L3 cache size on my hardware
-constexpr size_t key_string_size = 128;
-constexpr size_t item_count = dataset_size / key_string_size;
+struct FreeDeleter { void operator()(char *p) const { free(p); } };
 
 char *stringFromInt(int value);
+
+struct BenchmarkDataset {
+    std::vector<std::unique_ptr<char, FreeDeleter>> insert_keys;
+    std::vector<std::unique_ptr<char, FreeDeleter>> miss_keys;
+    std::vector<char *> insert_ptrs;
+    std::vector<char *> lookup_ptrs;
+
+    BenchmarkDataset(int hit_percent, size_t count);
+};

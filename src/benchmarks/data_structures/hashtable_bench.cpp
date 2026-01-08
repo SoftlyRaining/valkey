@@ -1,128 +1,46 @@
 #include <benchmark/benchmark.h>
 
+#include "../common/config.h"
 #include "../common/util.h"
 
 extern "C" {
 #include "hashtable.h"
 }
 
-static void BM_HashtableFind_0Miss(benchmark::State &state) {
-    // Prepare a hashtable and insert some keys
-    hashtableType type = {
-        .instant_rehashing = 1};
-    hashtable *ht = hashtableCreate(&type);
+static hashtableType BenchmarkHashtableType = {.instant_rehashing = 1};
 
-    std::vector<char *> keys;
-    for (int i = 0; static_cast<size_t>(i) < item_count; ++i) {
-        char *key = stringFromInt(i);
-        keys.push_back(key);
-        hashtableAdd(ht, key);
-    }
+class HashtableFindFixture : public benchmark::Fixture {
+protected:
+    hashtable *ht = nullptr;
+    std::unique_ptr<BenchmarkDataset> data;
 
-    size_t idx = 0;
-    for (auto _ : state) {
-        bool found = hashtableFind(ht, keys[idx], nullptr);
-        benchmark::DoNotOptimize(found);
-        idx = (idx + 1) % item_count;
-        benchmark::ClobberMemory();
-    }
-
-    hashtableRelease(ht);
-
-    // Free allocated keys
-    for (char *key : keys) {
-        free(key);
-    }
-}
-
-static void BM_HashtableFind_50Miss(benchmark::State &state) {
-    // Prepare a hashtable and insert some keys
-    hashtableType type = {
-        .instant_rehashing = 1};
-    hashtable *ht = hashtableCreate(&type);
-
-    int num_to_remove = item_count;
-    const int num_keys = num_to_remove * 2;
-
-    std::vector<char *> keys;
-    for (int i = 0; i < num_keys; ++i) {
-        char *key = stringFromInt(i);
-        keys.push_back(key);
-        hashtableAdd(ht, key);
-    }
-
-    for (int i = 0; i < num_keys; ++i) {
-        int chances_remaining = num_keys - i;
-        if (rand() % chances_remaining < num_to_remove) { // Probability of num_to_remove / chances_remaining
-            hashtableDelete(ht, keys[i]);
-            num_to_remove--;
+public:
+    void SetUp(benchmark::State &state) override {
+        int hit_percent = 100 - state.range(0);
+        data = std::make_unique<BenchmarkDataset>(hit_percent, bench::item_count);
+        ht = hashtableCreate(&BenchmarkHashtableType);
+        for (char *key : data->insert_ptrs) {
+            hashtableAdd(ht, key);
         }
     }
 
+    void TearDown(benchmark::State &) override {
+        hashtableRelease(ht);
+    }
+};
+
+BENCHMARK_DEFINE_F(HashtableFindFixture, Find)(benchmark::State &state) {
     size_t idx = 0;
+    size_t num_keys = data->lookup_ptrs.size();
     for (auto _ : state) {
-        bool found = hashtableFind(ht, keys[idx], nullptr);
+        bool found = hashtableFind(ht, data->lookup_ptrs[idx], nullptr);
         benchmark::DoNotOptimize(found);
         idx = (idx + 1) % num_keys;
         benchmark::ClobberMemory();
     }
-
-    hashtableRelease(ht);
-
-    // Free allocated keys
-    for (char *key : keys) {
-        free(key);
-    }
 }
 
-static void BM_HashtableFind_100Miss(benchmark::State &state) {
-    // Prepare a hashtable and insert some keys
-    hashtableType type = {
-        .instant_rehashing = 1};
-    hashtable *ht = hashtableCreate(&type);
-
-    const int num_keys = item_count;
-    std::vector<char *> inserted_keys;
-    for (int i = 0; i < num_keys; ++i) {
-        char *key = stringFromInt(i);
-        inserted_keys.push_back(key);
-        hashtableAdd(ht, key);
-    }
-
-    // Create different keys for lookup that don't exist
-    std::vector<char *> lookup_keys;
-    for (int i = 0; i < num_keys; ++i) {
-        char *key = stringFromInt(i + item_count);
-        lookup_keys.push_back(key);
-    }
-
-    size_t idx = 0;
-    for (auto _ : state) {
-        bool found = hashtableFind(ht, lookup_keys[idx], nullptr);
-        benchmark::DoNotOptimize(found);
-        idx = (idx + 1) % num_keys;
-        benchmark::ClobberMemory();
-    }
-
-    hashtableRelease(ht);
-
-    // Free allocated keys
-    for (char *key : inserted_keys) {
-        free(key);
-    }
-    for (char *key : lookup_keys) {
-        free(key);
-    }
-}
-
-BENCHMARK(BM_HashtableFind_0Miss)
-    ->Repetitions(5)
-    ->MinTime(5.0);
-
-BENCHMARK(BM_HashtableFind_50Miss)
-    ->Repetitions(5)
-    ->MinTime(5.0);
-
-BENCHMARK(BM_HashtableFind_100Miss)
+BENCHMARK_REGISTER_F(HashtableFindFixture, Find)
+    ->Arg(0)->Arg(50)->Arg(100)
     ->Repetitions(5)
     ->MinTime(5.0);
