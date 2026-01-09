@@ -760,8 +760,8 @@ server_nomain.o: server.c .make-prerequisites
 	objcopy --redefine-sym main=_valkey_main_unused server_nolto.o $@
 	@rm -f server_nolto.o
 
-$(MICROBENCH_NAME): $(MICROBENCH_OBJ) $(MICROBENCH_SERVER_OBJ)
-	$(CXX) $(filter-out -flto%,$(FINAL_LDFLAGS)) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
+$(MICROBENCH_NAME): $(MICROBENCH_OBJ) $(MICROBENCH_SERVER_OBJ) .make-prerequisites
+	$(CXX) $(filter-out -flto%,$(FINAL_LDFLAGS)) -o $@ $(filter-out .make-prerequisites,$^) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
 
 # C++ flags for benchmarks (filter out C-specific flags from FINAL_CFLAGS)
 MICROBENCH_CXXFLAGS = -std=c++20 -O3 -Wall -Wno-pedantic -Ibenchmarks
