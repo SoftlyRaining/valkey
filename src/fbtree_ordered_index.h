@@ -28,6 +28,10 @@ void fbtreeResetIterator(fbtreeIterator *iterator);
 bool fbtreeNext(fbtreeIterator *iterator, static_string **pos);
 bool fbtreePrev(fbtreeIterator *iterator, static_string **pos);
 
+void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
+static_string *fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
+unsigned long fbtreeGetRankOfKey(fbtreeIndex *fbt, static_string *key);
+
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
 

@@ -1855,3 +1855,220 @@ int test_fbtree_delete_anchor_bubbleup(int argc, char **argv, int flags) {
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
+
+/* ========== Rank Tests ========== */
+
+int test_fbtree_rank_single_leaf(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    const char *items[] = {"cherry", "apple", "banana", "date"};
+    for (int i = 0; i < 4; i++) {
+        static_string *str = createString(items[i]);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    
+    /* After sorting: apple, banana, cherry, date */
+    static_string *result = fbtreeGetAtRank(fbt, 0);
+    TEST_ASSERT(result && memcmp(result->buf, "apple", 6) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 1);
+    TEST_ASSERT(result && memcmp(result->buf, "banana", 7) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 2);
+    TEST_ASSERT(result && memcmp(result->buf, "cherry", 7) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 3);
+    TEST_ASSERT(result && memcmp(result->buf, "date", 5) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 4);
+    TEST_ASSERT(result == NULL);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_rank_multilevel(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    char buf[16];
+    for (int i = 0; i < 200; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    TEST_ASSERT(fbtreeDebugValidate(fbt, 0));
+    
+    /* Test rank access at various positions */
+    static_string *result;
+    
+    result = fbtreeGetAtRank(fbt, 0);
+    TEST_ASSERT(result && memcmp(result->buf, "key_000", 8) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 50);
+    TEST_ASSERT(result && memcmp(result->buf, "key_050", 8) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 100);
+    TEST_ASSERT(result && memcmp(result->buf, "key_100", 8) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 199);
+    TEST_ASSERT(result && memcmp(result->buf, "key_199", 8) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 200);
+    TEST_ASSERT(result == NULL);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_rank_after_delete(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    char buf[16];
+    for (int i = 0; i < 100; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    
+    /* Delete key_050 */
+    static_string *del_str = createString("key_050");
+    TEST_ASSERT(fbtreeDelete(fbt, del_str));
+    zfree(del_str);
+    
+    /* Rank 50 should now be key_051 */
+    static_string *result = fbtreeGetAtRank(fbt, 50);
+    TEST_ASSERT(result && memcmp(result->buf, "key_051", 8) == 0);
+    
+    /* Rank 49 should still be key_049 */
+    result = fbtreeGetAtRank(fbt, 49);
+    TEST_ASSERT(result && memcmp(result->buf, "key_049", 8) == 0);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_get_rank_of_key(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    char buf[16];
+    for (int i = 0; i < 100; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    
+    static_string *search;
+    
+    search = createString("key_000");
+    TEST_ASSERT(fbtreeGetRankOfKey(fbt, search) == 0);
+    zfree(search);
+    
+    search = createString("key_050");
+    TEST_ASSERT(fbtreeGetRankOfKey(fbt, search) == 50);
+    zfree(search);
+    
+    search = createString("key_099");
+    TEST_ASSERT(fbtreeGetRankOfKey(fbt, search) == 99);
+    zfree(search);
+    
+    /* Non-existent key */
+    search = createString("key_100");
+    TEST_ASSERT(fbtreeGetRankOfKey(fbt, search) == fbtreeLength(fbt));
+    zfree(search);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_seek_to_rank(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    char buf[16];
+    for (int i = 0; i < 100; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    static_string *pos;
+    
+    /* Seek to rank 50 and iterate forward */
+    fbtreeSeekToRank(&it, 50);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos->buf, "key_050", 8) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos->buf, "key_051", 8) == 0);
+    
+    /* Seek to rank 0 */
+    fbtreeSeekToRank(&it, 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos->buf, "key_000", 8) == 0);
+    
+    /* Seek to last rank */
+    fbtreeSeekToRank(&it, 99);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos->buf, "key_099", 8) == 0);
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_rank_deep_tree(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    /* Create deep tree with 5000 items */
+    char buf[16];
+    for (int i = 0; i < 5000; i++) {
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        static_string *str = createString(buf);
+        fbtreeInsert(fbt, str);
+        zfree(str);
+    }
+    TEST_ASSERT(fbtreeDebugValidate(fbt, 0));
+    
+    /* Test rank access at various positions */
+    static_string *result;
+    
+    result = fbtreeGetAtRank(fbt, 0);
+    TEST_ASSERT(result && memcmp(result->buf, "key_00000", 10) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 2500);
+    TEST_ASSERT(result && memcmp(result->buf, "key_02500", 10) == 0);
+    
+    result = fbtreeGetAtRank(fbt, 4999);
+    TEST_ASSERT(result && memcmp(result->buf, "key_04999", 10) == 0);
+    
+    /* Test get rank of key */
+    static_string *search = createString("key_02500");
+    TEST_ASSERT(fbtreeGetRankOfKey(fbt, search) == 2500);
+    zfree(search);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
