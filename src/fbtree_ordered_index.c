@@ -44,12 +44,17 @@ typedef struct {
 typedef struct leafNode {
     struct nodeFlags flags;
     uint64_t presence_bitmap;
-    static_string *high_key;
+    int8_t high_key_index; /* -1 if empty, otherwise index into values[] */
     struct leafNode *prev;
     struct leafNode *next;
     // char tags[NODE_SIZE]; // TODO: add leaf hash tag stuff
     static_string *values[NODE_SIZE];
 } leafNode;
+
+/* Get high_key pointer from leaf node */
+static inline static_string *leafNodeHighKey(leafNode *leaf) {
+    return (leaf->high_key_index < 0) ? NULL : leaf->values[leaf->high_key_index];
+}
 static_assert(NODE_SIZE <= 64, "NODE_SIZE must be <= 64 to fit in presence_bitmap");
 
 struct fbtreeIndex {
@@ -110,7 +115,7 @@ static leafNode *leafNodeCreate(void) {
     node->flags.is_ordered = 0;
     node->flags.is_leaf = 1;
     node->presence_bitmap = 0;
-    node->high_key = NULL;
+    node->high_key_index = -1;
     node->prev = NULL;
     node->next = NULL;
     // memset(node->tags, 0, sizeof(node->tags));
@@ -135,7 +140,6 @@ static void freeNodeRecursive(node *n) {
                 zfree(leaf->values[i]);
             }
         }
-        if (leaf->high_key) zfree(leaf->high_key);
         zfree(leaf);
     } else {
         innerNode *inner = (innerNode *)n;
@@ -274,10 +278,6 @@ static void leafNodeEnsureSort(leafNode *leaf) {
 
     uint64_t bitmap = leaf->presence_bitmap;
     const int count = __builtin_popcountll(bitmap);
-    if (count <= 1) {
-        leaf->flags.is_ordered = 1;
-        return;
-    }
     
     /* Collect valid entries into temporary array */
     static_string *temp[NODE_SIZE];
@@ -303,6 +303,7 @@ static void leafNodeEnsureSort(leafNode *leaf) {
     /* Rebuild array compacted and sorted */
     memcpy(leaf->values, temp, count * sizeof(static_string *));
     leaf->presence_bitmap = (count == 64) ? ~0ULL : (1ULL << count) - 1;
+    leaf->high_key_index = count - 1; /* After sorting, max is always at end. -1 if count is zero. */
     leaf->flags.is_ordered = 1;
 }
 
@@ -341,11 +342,10 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
         else
             leaf->presence_bitmap = (1ULL << (count + 1)) - 1;
 
-        /* Update high_key if inserting at the end (new maximum) */
+        /* For ordered nodes, max is always at the end */
+        leaf->high_key_index = count; /* count is the new last index after insert */
         if (left == count) {
-            if (leaf->high_key) zfree(leaf->high_key);
-            leaf->high_key = staticStringCopy(string);
-            result.updated_anchor = leaf->high_key;
+            result.updated_anchor = leaf->values[count];
         }
     } else {
         /* Unordered: find first empty slot */
@@ -353,11 +353,10 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
         leaf->values[slot] = staticStringCopy(string);
         leaf->presence_bitmap |= (1ULL << slot);
 
-        /* Update high_key if this is larger than current high_key */
-        if (!leaf->high_key || compareStrings(string, (static_string *)leaf->high_key) > 0) {
-            if (leaf->high_key) zfree(leaf->high_key);
-            leaf->high_key = staticStringCopy(string);
-            result.updated_anchor = leaf->high_key;
+        /* Update high_key_index if this is larger than current high_key */
+        if (leaf->high_key_index < 0 || compareStrings(string, leaf->values[leaf->high_key_index]) > 0) {
+            leaf->high_key_index = slot;
+            result.updated_anchor = leaf->values[slot];
         }
     }
     return result;
@@ -382,21 +381,21 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
     left_leaf->presence_bitmap = (1ULL << num_left) - 1;
     right_leaf->presence_bitmap = (1ULL << num_right) - 1;
 
-    /* Update high keys */
-    right_leaf->high_key = left_leaf->high_key;
-    left_leaf->high_key = staticStringCopy(left_leaf->values[num_left - 1]);
+    /* Update high key indices */
+    right_leaf->high_key_index = num_right - 1;
+    left_leaf->high_key_index = num_left - 1;
 
     /* Insert string into appropriate leaf */
-    if (compareStrings(string, left_leaf->high_key) <= 0) {
+    if (compareStrings(string, leafNodeHighKey(left_leaf)) <= 0) {
         leafNodeInsert(left_leaf, string);
     } else {
         leafNodeInsert(right_leaf, string);
     }
 
     insertResult result = {
-        .updated_anchor = left_leaf->high_key,
+        .updated_anchor = leafNodeHighKey(left_leaf),
         .new_node = (node *)right_leaf,
-        .new_node_anchor = right_leaf->high_key
+        .new_node_anchor = leafNodeHighKey(right_leaf)
     };
     return result;
 }
@@ -577,14 +576,13 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
         memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1], num_to_shift * sizeof(static_string *));
 
         /* Update presence bitmap */
-        leaf->presence_bitmap = (1ULL << (count)) - 1;
+        leaf->presence_bitmap = (1ULL << count) - 1;
 
+        /* For ordered nodes, max is always at the end */
+        leaf->high_key_index = count - 1; /* -1 if count is zero */
         if (delete_index == count) {
-            /* need to update high key */
-            zfree(leaf->high_key);
-            // TODO: implement node merge, deleting to empty set. handle empty node edge case.
-            leaf->high_key = (count == 0) ? NULL : staticStringCopy(leaf->values[count - 1]);
-            result.updated_anchor = leaf->high_key;
+            /* Deleted the max element, need to update anchor */
+            result.updated_anchor = leafNodeHighKey(leaf);
         }
         return result;
     } else {
@@ -600,11 +598,10 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
                         .delete_executed = true,
                     };
                     
-                    if (stringsEqual(leaf->high_key, key)) {
-                        /* Update high_key */
+                    if (i == leaf->high_key_index) {
+                        /* Update high_key_index */
                         if (leaf->presence_bitmap == 0) {
-                            zfree(leaf->high_key);
-                            leaf->high_key = NULL;
+                            leaf->high_key_index = -1;
                             return result; // TODO: implement node merge, deleting to empty set. handle empty node edge case.
                         }
                         
@@ -620,9 +617,8 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
                             }
                         }
                         
-                        zfree(leaf->high_key);
-                        leaf->high_key = staticStringCopy(leaf->values[max_index]);
-                        result.updated_anchor = leaf->high_key;
+                        leaf->high_key_index = max_index;
+                        result.updated_anchor = leafNodeHighKey(leaf);
                     }
                     return result;
                 }
@@ -883,24 +879,24 @@ static validateResult validateNode(node *n, int depth, size_t parent_prefix_len,
 
 static bool validateLeafHighKey(leafNode *leaf) {
     int count = __builtin_popcountll(leaf->presence_bitmap);
-    if (count == 0) return leaf->high_key == NULL;
-    if (!leaf->high_key) return false;
+    if (count == 0) return leaf->high_key_index < 0;
+    if (leaf->high_key_index < 0) return false;
     
+    static_string *high_key = leafNodeHighKey(leaf);
     if (leaf->flags.is_ordered) {
-        return compareStrings(leaf->values[count - 1], leaf->high_key) == 0;
+        return leaf->high_key_index == count - 1;
     }
     
     /* Find max in unordered leaf */
-    static_string *max_item = NULL;
     uint64_t bitmap = leaf->presence_bitmap;
     while (bitmap) {
         int idx = __builtin_ctzll(bitmap);
         bitmap &= bitmap - 1;
-        if (!max_item || compareStrings(leaf->values[idx], max_item) > 0) {
-            max_item = leaf->values[idx];
+        if (compareStrings(leaf->values[idx], high_key) > 0) {
+            return false;
         }
     }
-    return max_item && compareStrings(max_item, leaf->high_key) == 0;
+    return true;
 }
 
 static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
@@ -944,7 +940,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         
         /* Validate anchor matches child's high key */
         static_string *expected = child->flags.is_leaf 
-            ? ((leafNode *)child)->high_key 
+            ? leafNodeHighKey((leafNode *)child)
             : ((innerNode *)child)->anchors[((innerNode *)child)->num_anchor_keys - 1];
         bool anchor_ok = (expected == anchor);
         
