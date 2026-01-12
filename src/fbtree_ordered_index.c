@@ -14,9 +14,10 @@
 #define UNUSED(V) ((void)V)
 #endif
 
-#define NODE_SIZE 64
+#define NODE_SIZE 60
+#define FULL_PRESENCE_BITMAP ((1ULL << NODE_SIZE) - 1)
 #define FEATURE_SIZE 4
-#define EMBED_PREFIX_LEN 224
+#define EMBED_PREFIX_LEN 86
 // TODO: if feature_size is 4B, we could copy/compare/etc as 32-bit words for speed
 
 struct nodeFlags {
@@ -32,24 +33,26 @@ typedef struct {
 
 typedef struct {
     struct nodeFlags flags;
-    size_t prefix_len;
-    char embedded_prefix[EMBED_PREFIX_LEN]; // TODO: use pointer for larger prefix
     uint8_t num_anchor_keys;
+    char embedded_prefix[EMBED_PREFIX_LEN]; // TODO: use pointer for larger prefix
+    size_t prefix_len;
     char features[NODE_SIZE][FEATURE_SIZE]; // TODO: impl SIMD parallel feature comparison: char features[FEATURE_SIZE][NODE_SIZE];
     static_string *anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
     node *children[NODE_SIZE];
     uint32_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
 } innerNode;
+static_assert(sizeof(innerNode) == 1536, "should fit perfectly in 512B size class");
 
 typedef struct leafNode {
     struct nodeFlags flags;
-    uint64_t presence_bitmap;
     int8_t high_key_index; /* -1 if empty, otherwise index into values[] */
+    uint64_t presence_bitmap;
     struct leafNode *prev;
     struct leafNode *next;
     // char tags[NODE_SIZE]; // TODO: add leaf hash tag stuff
     static_string *values[NODE_SIZE];
 } leafNode;
+static_assert(sizeof(leafNode) == 512, "should fit perfectly in 512B size class");
 
 /* Get high_key pointer from leaf node */
 static inline static_string *leafNodeHighKey(leafNode *leaf) {
@@ -197,10 +200,10 @@ static void updateCommonPrefix(innerNode *inner) {
     size_t len = 0;
     while (len < max_len && first_anchor->buf[len] == last_anchor->buf[len]) len++;
 
-    if (len != inner->prefix_len) {
-        if (len > inner->prefix_len) {
-            memcpy(inner->embedded_prefix, first_anchor->buf, len);
-        }
+    bool prefix_changed = (len != inner->prefix_len) ||
+                           (len > 0 && memcmp(inner->embedded_prefix, first_anchor->buf, len) != 0);
+    if (prefix_changed) {
+        memcpy(inner->embedded_prefix, first_anchor->buf, len);
         inner->prefix_len = len;
         recomputeFeatures(inner);
     }
@@ -323,7 +326,7 @@ static int leafNodeBinarySearch(leafNode *leaf, static_string *string) {
 
 static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
     /* We assume here there is capacity to insert without splitting */
-    assert(leaf->presence_bitmap != ~0ULL);
+    assert(leaf->presence_bitmap != FULL_PRESENCE_BITMAP);
 
     insertResult result = {0};
 
@@ -364,7 +367,7 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
 
 static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
     leafNodeEnsureSort(left_leaf);
-    assert(left_leaf->presence_bitmap == ~0ULL);
+    assert(left_leaf->presence_bitmap == FULL_PRESENCE_BITMAP);
     const size_t num_left = NODE_SIZE / 2;
     const size_t num_right = NODE_SIZE - num_left; /* needed if we ever made NODE_SIZE odd */
 
@@ -467,7 +470,7 @@ static insertResult subtreeInsert(node *n, static_string *string) {
     assert(n);
     if (n->flags.is_leaf) {
         leafNode *leaf = (leafNode *)n;
-        if (leaf->presence_bitmap == ~0ULL) {
+        if (leaf->presence_bitmap == FULL_PRESENCE_BITMAP) {
             return leafNodeSplit(leaf, string);
         } else {
             return leafNodeInsert(leaf, string);
@@ -483,6 +486,10 @@ static insertResult subtreeInsert(node *n, static_string *string) {
 
         if (child_insert_result.updated_anchor) {
             parent->anchors[child_idx] = child_insert_result.updated_anchor;
+            /* Anchor changed - prefix may need to shrink if this is first or last child */
+            if (child_idx == 0 || child_idx == parent->num_anchor_keys - 1) {
+                updateCommonPrefix(parent);
+            }
             getStringFeature(child_insert_result.updated_anchor, parent->prefix_len, parent->features[child_idx]);
         }
 
