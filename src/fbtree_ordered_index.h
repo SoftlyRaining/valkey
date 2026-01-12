@@ -5,7 +5,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Static string type used internally */
+/* Static string type used internally.
+ * For zset entries, buf contains: [8-byte normalized score][element bytes]
+ * The normalized score is stored in big-endian for lexicographic ordering.
+ * TODO: Add endian conversion (htonu64/ntohu64) when packing/unpacking scores
+ *       to support big-endian platforms. See endianconv.h */
 typedef struct static_string {
     const size_t len;
     const char buf[];
