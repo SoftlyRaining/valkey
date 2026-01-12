@@ -18,7 +18,12 @@
 #define FULL_PRESENCE_BITMAP ((1ULL << NODE_SIZE) - 1)
 #define FEATURE_SIZE 4
 #define EMBED_PREFIX_LEN 86
-// TODO: if feature_size is 4B, we could copy/compare/etc as 32-bit words for speed
+
+/* Split ratio for rightmost/append-optimized) split.
+ * When sequential insert patterns are detected, we use asymmetric splits
+ * to keep nodes nearly full instead of 50% full. This is a common B-tree
+ * optimization. */
+#define SPLIT_SMALL_SIDE 1  /* items moved to the new node (must be >= 1) */
 
 struct nodeFlags {
     uint8_t is_ordered : 1;
@@ -160,7 +165,11 @@ void fbtreeFree(fbtreeIndex *fbt) {
     zfree(fbt);
 }
 
-/* String comparison for sorting. Returns: <0 if a < b, 0 if a == b, >0 if a > b (standard strcmp convention) */
+/* String comparison for sorting. Returns: <0 if a < b, 0 if a == b, >0 if a > b (standard strcmp convention)
+ * For zset entries with packed [normalized_score][element], this provides correct ordering
+ * because the score is normalized to sort lexicographically (sign bit flipped, negative values inverted).
+ * TODO: Score normalization must use big-endian byte order for cross-platform compatibility.
+ *       Ensure normalize/denormalize functions use htonu64/ntohu64 from endianconv.h */
 static int compareStrings(static_string *a, static_string *b) {
     size_t min_len = a->len < b->len ? a->len : b->len;
     int cmp = memcmp(a->buf, b->buf, min_len);
@@ -368,8 +377,25 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
 static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
     leafNodeEnsureSort(left_leaf);
     assert(left_leaf->presence_bitmap == FULL_PRESENCE_BITMAP);
-    const size_t num_left = NODE_SIZE / 2;
-    const size_t num_right = NODE_SIZE - num_left; /* needed if we ever made NODE_SIZE odd */
+
+    /* Detect append/prepend patterns for asymmetric split optimization */
+    bool is_append = compareStrings(string, left_leaf->values[NODE_SIZE - 1]) > 0;
+    bool is_prepend = compareStrings(string, left_leaf->values[0]) < 0;
+
+    size_t num_left, num_right;
+    if (is_append) {
+        /* Append pattern: keep left nearly full, new key goes to right */
+        num_left = NODE_SIZE - SPLIT_SMALL_SIDE;
+        num_right = SPLIT_SMALL_SIDE;
+    } else if (is_prepend) {
+        /* Prepend pattern: move most to right, new key goes to left */
+        num_left = SPLIT_SMALL_SIDE;
+        num_right = NODE_SIZE - SPLIT_SMALL_SIDE;
+    } else {
+        /* Random insert: standard 50/50 split */
+        num_left = NODE_SIZE / 2;
+        num_right = NODE_SIZE - num_left;
+    }
 
     /* Create new leaf, insert to right in doubly linked list */
     leafNode *right_leaf = leafNodeCreate();
@@ -379,7 +405,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
     left_leaf->next = right_leaf;
     if (right_leaf->next) right_leaf->next->prev = right_leaf;
 
-    /* Move second half of elements to new leaf */
+    /* Move elements to new leaf based on split ratio */
     memcpy(right_leaf->values, &left_leaf->values[num_left], num_right * sizeof(static_string *));
     left_leaf->presence_bitmap = (1ULL << num_left) - 1;
     right_leaf->presence_bitmap = (1ULL << num_right) - 1;
