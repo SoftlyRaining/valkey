@@ -4,11 +4,18 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include "config.h"
 #include "fbtree_ordered_index.h"
 #include "ordered_index.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "static_string.h"
+
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#elif HAVE_ARM_NEON
+#include <arm_neon.h>
+#endif
 
 /* Anti-warning macro... */
 #ifndef UNUSED
@@ -18,7 +25,8 @@
 #define NODE_SIZE 60
 #define FULL_PRESENCE_BITMAP ((1ULL << NODE_SIZE) - 1)
 #define FEATURE_SIZE 4
-#define EMBED_PREFIX_LEN 86
+#define EMBED_PREFIX_LEN 70
+#define FEATURE_ROW_SIZE 64 /* size of cache line */
 
 /* Split ratio for rightmost/append-optimized) split.
  * When sequential insert patterns are detected, we use asymmetric splits
@@ -42,12 +50,13 @@ typedef struct {
     uint8_t num_anchor_keys;
     char embedded_prefix[EMBED_PREFIX_LEN]; // TODO: use pointer for larger prefix
     size_t prefix_len;
-    char features[NODE_SIZE][FEATURE_SIZE]; // TODO: impl SIMD parallel feature comparison: char features[FEATURE_SIZE][NODE_SIZE];
+    char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     static_string anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
     node *children[NODE_SIZE];
     uint32_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
 } innerNode;
 static_assert(sizeof(innerNode) == 1536, "should fit perfectly in 512B size class");
+static_assert(NODE_SIZE <= FEATURE_ROW_SIZE, "NODE_SIZE must fit in feature row");
 
 typedef struct leafNode {
     struct nodeFlags flags;
@@ -159,21 +168,24 @@ void fbtreeFree(fbtreeIndex *fbt) {
     zfree(fbt);
 }
 
-static void getStringFeature(const_static_string string, size_t prefix_len, char *feature_out) {
-    size_t len = sslen(string);
-    size_t feature_size = len - prefix_len;
-    if (feature_size > FEATURE_SIZE) feature_size = FEATURE_SIZE;
-    memcpy(feature_out, string + prefix_len, feature_size);
-    memset(feature_out + feature_size, 0, FEATURE_SIZE - feature_size);
+/* Bias constant for SIMD unsigned comparison: XOR with 0x80 converts unsigned
+ * [0,255] to signed [-128,127] while preserving order. Features are stored
+ * pre-biased so we only need to bias the search target at lookup time. */
+#define FEATURE_BIAS 0x80
+
+/* Get feature byte j from string, returning 0 if string is too short.
+ * Returns the biased value (XOR'd with 0x80) for SIMD comparison. */
+static inline char getFeatureByte(const_static_string s, size_t prefix_len, int j) {
+    size_t idx = prefix_len + j;
+    unsigned char raw = (idx < sslen(s)) ? (unsigned char)s[idx] : 0;
+    return (char)(raw ^ FEATURE_BIAS);
 }
 
 static void recomputeFeatures(innerNode *inner) {
     for (int i = 0; i < inner->num_anchor_keys; i++) {
         assert(sslen(inner->anchors[i]) >= inner->prefix_len);
-        size_t feature_size = sslen(inner->anchors[i]) - inner->prefix_len;
-        if (feature_size > FEATURE_SIZE) feature_size = FEATURE_SIZE;
-        memcpy(inner->features[i], inner->anchors[i] + inner->prefix_len, feature_size);
-        memset(inner->features[i] + feature_size, 0, FEATURE_SIZE - feature_size);
+        for (int j = 0; j < FEATURE_SIZE; j++)
+            inner->features[j][i] = getFeatureByte(inner->anchors[i], inner->prefix_len, j);
     }
 }
 
@@ -219,14 +231,16 @@ static bool innerNodeInsert(innerNode *parent, const node *child, static_string 
     /* shift higher elements to make space */
     size_t num_to_move = parent->num_anchor_keys - insert_index;
     if (num_to_move > 0) {
-        memmove(&parent->features[insert_index + 1], &parent->features[insert_index], num_to_move * sizeof(parent->features[0]));
+        for (int j = 0; j < FEATURE_SIZE; j++)
+            memmove(&parent->features[j][insert_index + 1], &parent->features[j][insert_index], num_to_move);
         memmove(&parent->anchors[insert_index + 1], &parent->anchors[insert_index], num_to_move * sizeof(parent->anchors[0]));
         memmove(&parent->children[insert_index + 1], &parent->children[insert_index], num_to_move * sizeof(parent->children[0]));
         memmove(&parent->child_sizes[insert_index + 1], &parent->child_sizes[insert_index], num_to_move * sizeof(parent->child_sizes[0]));
     }
 
-    /* insert child */
-    getStringFeature(child_anchor, parent->prefix_len, parent->features[insert_index]);
+    /* insert child - features stored pre-biased for SIMD comparison */
+    for (int j = 0; j < FEATURE_SIZE; j++)
+        parent->features[j][insert_index] = getFeatureByte(child_anchor, parent->prefix_len, j);
     parent->anchors[insert_index] = child_anchor;
     parent->children[insert_index] = (node *)child;
     parent->child_sizes[insert_index] = getNodeSize((node *)child);
@@ -249,7 +263,8 @@ static innerNode *innerNodeSplit(innerNode *left_node) {
     const size_t num_left_keys = NODE_SIZE / 2;
     const size_t num_right_keys = NODE_SIZE - num_left_keys;
 
-    memcpy(right_node->features, left_node->features + num_left_keys, num_right_keys * sizeof(left_node->features[0]));
+    for (int j = 0; j < FEATURE_SIZE; j++)
+        memcpy(right_node->features[j], left_node->features[j] + num_left_keys, num_right_keys);
     memcpy(right_node->anchors, left_node->anchors + num_left_keys, num_right_keys * sizeof(left_node->anchors[0]));
     memcpy(right_node->children, left_node->children + num_left_keys, num_right_keys * sizeof(left_node->children[0]));
     memcpy(right_node->child_sizes, left_node->child_sizes + num_left_keys, num_right_keys * sizeof(left_node->child_sizes[0]));
@@ -409,31 +424,163 @@ static insertResult leafNodeSplit(leafNode *left_leaf, const_static_string strin
     return result;
 }
 
-/* Find child index for insertion using feature vectors and anchors */
+/* SIMD feature search: finds range [out_left, out_right) of keys matching target.
+ * Features are stored pre-biased (XOR'd with 0x80), so we only bias the target.
+ * Bitmasks track candidates (ge_mask: target >= key, le_mask: target <= key). */
+#if HAVE_X86_SIMD
+
+ATTRIBUTE_TARGET_AVX2
+static void featureSearchSIMD_avx2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                                   int num_keys, const unsigned char target[FEATURE_SIZE],
+                                   int *out_left, int *out_right) {
+    uint64_t valid_mask = (num_keys >= 64) ? ~0ULL : (1ULL << num_keys) - 1;
+    uint64_t ge_mask = valid_mask;
+    uint64_t le_mask = valid_mask;
+
+    for (int j = 0; j < FEATURE_SIZE && (ge_mask || le_mask); j++) {
+        /* Bias target to match pre-biased features */
+        __m256i target_biased = _mm256_set1_epi8((char)(target[j] ^ FEATURE_BIAS));
+        uint64_t gt_this = 0, lt_this = 0;
+
+        /* Process 64 feature bytes in 2x32-byte chunks */
+        for (int chunk = 0; chunk < 2; chunk++) {
+            __m256i feat = _mm256_loadu_si256((const __m256i *)&features[j][chunk * 32]);
+            __m256i gt = _mm256_cmpgt_epi8(target_biased, feat);
+            __m256i lt = _mm256_cmpgt_epi8(feat, target_biased);
+            gt_this |= (uint64_t)(uint32_t)_mm256_movemask_epi8(gt) << (chunk * 32);
+            lt_this |= (uint64_t)(uint32_t)_mm256_movemask_epi8(lt) << (chunk * 32);
+        }
+
+        /* Narrow candidate set: eliminate keys where comparison is decided */
+        uint64_t undecided = ge_mask & le_mask;
+        ge_mask &= ~(lt_this & undecided);
+        le_mask &= ~(gt_this & undecided);
+    }
+
+    *out_left = le_mask ? __builtin_ctzll(le_mask) : num_keys;
+    *out_right = (le_mask & ~ge_mask) ? __builtin_ctzll(le_mask & ~ge_mask) : num_keys;
+}
+
+ATTRIBUTE_TARGET_SSE2
+static void featureSearchSIMD_sse2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                                   int num_keys, const unsigned char target[FEATURE_SIZE],
+                                   int *out_left, int *out_right) {
+    uint64_t valid_mask = (num_keys >= 64) ? ~0ULL : (1ULL << num_keys) - 1;
+    uint64_t ge_mask = valid_mask;
+    uint64_t le_mask = valid_mask;
+
+    for (int j = 0; j < FEATURE_SIZE && (ge_mask || le_mask); j++) {
+        /* Bias target to match pre-biased features */
+        __m128i target_biased = _mm_set1_epi8((char)(target[j] ^ FEATURE_BIAS));
+        uint64_t gt_this = 0, lt_this = 0;
+
+        /* Process 64 feature bytes in 4x16-byte chunks */
+        for (int chunk = 0; chunk < 4; chunk++) {
+            __m128i feat = _mm_loadu_si128((const __m128i *)&features[j][chunk * 16]);
+            __m128i gt = _mm_cmpgt_epi8(target_biased, feat);
+            __m128i lt = _mm_cmplt_epi8(target_biased, feat);
+            gt_this |= (uint64_t)(uint16_t)_mm_movemask_epi8(gt) << (chunk * 16);
+            lt_this |= (uint64_t)(uint16_t)_mm_movemask_epi8(lt) << (chunk * 16);
+        }
+
+        uint64_t undecided = ge_mask & le_mask;
+        ge_mask &= ~(lt_this & undecided);
+        le_mask &= ~(gt_this & undecided);
+    }
+
+    *out_left = le_mask ? __builtin_ctzll(le_mask) : num_keys;
+    *out_right = (le_mask & ~ge_mask) ? __builtin_ctzll(le_mask & ~ge_mask) : num_keys;
+}
+
+static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                              int num_keys, const unsigned char target[FEATURE_SIZE],
+                              int *out_left, int *out_right) {
+    if (__builtin_cpu_supports("avx2")) {
+        featureSearchSIMD_avx2(features, num_keys, target, out_left, out_right);
+    } else {
+        featureSearchSIMD_sse2(features, num_keys, target, out_left, out_right);
+    }
+}
+
+#elif HAVE_ARM_NEON
+#error "TODO: Implement ARM NEON version of featureSearchSIMD"
+
+#else
+/* Scalar fallback - features are stored pre-biased, so bias target for comparison */
+static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                              int num_keys, const unsigned char target[FEATURE_SIZE],
+                              int *out_left, int *out_right) {
+    int left = 0, right = num_keys;
+    
+    /* Find leftmost position where target <= feature (lower bound) */
+    for (int i = 0; i < num_keys; i++) {
+        int cmp = 0;
+        for (int j = 0; j < FEATURE_SIZE && cmp == 0; j++) {
+            signed char target_biased = (signed char)(target[j] ^ FEATURE_BIAS);
+            cmp = target_biased - (signed char)features[j][i];
+        }
+        if (cmp <= 0) {
+            left = i;
+            break;
+        }
+        left = i + 1;
+    }
+    
+    /* Find rightmost position where target >= feature (upper bound) */
+    right = left;
+    for (int i = left; i < num_keys; i++) {
+        int cmp = 0;
+        for (int j = 0; j < FEATURE_SIZE && cmp == 0; j++) {
+            signed char target_biased = (signed char)(target[j] ^ FEATURE_BIAS);
+            cmp = target_biased - (signed char)features[j][i];
+        }
+        if (cmp < 0) break;
+        right = i + 1;
+    }
+    
+    *out_left = left;
+    *out_right = right;
+}
+#endif /* HAVE_X86_SIMD */
+
+/* Test wrapper to expose static function for unit testing */
+void featureSearchSIMD_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                                    int num_keys, const unsigned char target[FEATURE_SIZE],
+                                    int *out_left, int *out_right) {
+    featureSearchSIMD(features, num_keys, target, out_left, out_right);
+}
+
+/* Find child index for insertion using feature vectors and anchors.
+ * Two-pass approach:
+ * 1. SIMD pass: narrow candidates using feature comparison
+ * 2. Anchor pass: binary search on anchors within narrowed range (only if needed)
+ */
 static int findChildIndex(innerNode *inner, const_static_string string) {
-    /* given string may not share common prefix */
+    /* Check common prefix first */
     if (inner->prefix_len > 0) {
-        // TODO: long prefix support
         int cmp = memcmp(string, inner->embedded_prefix, inner->prefix_len);
         if (cmp < 0) return 0;
         if (cmp > 0) return inner->num_anchor_keys;
     }
 
-    /* Compute feature for the string */
-    char target_feature[FEATURE_SIZE];
-    getStringFeature(string, inner->prefix_len, target_feature); // TODO: could use pointer into string if it's long enough
+    /* Extract target feature bytes */
+    unsigned char target[FEATURE_SIZE];
+    size_t slen = sslen(string);
+    for (int j = 0; j < FEATURE_SIZE; j++) {
+        size_t idx = inner->prefix_len + j;
+        target[j] = (idx < slen) ? (unsigned char)string[idx] : 0;
+    }
 
-    /* Binary search on features */
-    // TODO: do linear feature search for branch prediction
-    // TODO: use SIMD for parallel feature comparison
-    int left = 0, right = inner->num_anchor_keys;
+    /* Pass 1: SIMD feature search to narrow range */
+    int left, right;
+    featureSearchSIMD(inner->features, inner->num_anchor_keys, target, &left, &right);
+    
+    /* TODO: consider scalar path for small num_anchor_keys */
+
+    /* Pass 2: Binary search on anchors within narrowed range (handles collisions) */
     while (left < right) {
         int mid = (left + right) / 2;
-        int cmp = memcmp(target_feature, inner->features[mid], FEATURE_SIZE);
-        if (cmp == 0) {
-            /* Feature collision - compare full anchor key */
-            cmp = sscmp(string, inner->anchors[mid]);
-        }
+        int cmp = sscmp(string, inner->anchors[mid]);
         if (cmp <= 0) {
             right = mid;
         } else {
@@ -496,7 +643,8 @@ static insertResult subtreeInsert(node *n, const_static_string string) {
             if (child_idx == 0 || child_idx == parent->num_anchor_keys - 1) {
                 updateCommonPrefix(parent);
             }
-            getStringFeature(child_insert_result.updated_anchor, parent->prefix_len, parent->features[child_idx]);
+            for (int j = 0; j < FEATURE_SIZE; j++)
+                parent->features[j][child_idx] = getFeatureByte(child_insert_result.updated_anchor, parent->prefix_len, j);
         }
 
         if (child_insert_result.new_node) {
@@ -654,7 +802,8 @@ static deleteResult subtreeDelete(node *n, const_static_string key) {
 
     if (child_result.updated_anchor) {
         inner->anchors[index] = child_result.updated_anchor;
-        getStringFeature(child_result.updated_anchor, inner->prefix_len, inner->features[index]);
+        for (int j = 0; j < FEATURE_SIZE; j++)
+            inner->features[j][index] = getFeatureByte(child_result.updated_anchor, inner->prefix_len, j);
     }
     
     // TODO: check if we need to update prefix and features
@@ -863,6 +1012,105 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
     it->current_index = (uint8_t)remaining;
 }
 
+/* Compare a string's prefix against a given prefix buffer.
+ * Returns <0 if string prefix < prefix, 0 if equal, >0 if string prefix > prefix */
+static inline int prefixCmp(const_static_string string, const char *prefix, size_t prefix_len) {
+    size_t str_len = sslen(string);
+    size_t cmp_len = str_len < prefix_len ? str_len : prefix_len;
+    int cmp = memcmp(string, prefix, cmp_len);
+    if (cmp != 0) return cmp;
+    /* If string is shorter than prefix, it's "less than" */
+    if (str_len < prefix_len) return -1;
+    return 0;
+}
+
+/* Find child index for prefix lookup - uses SIMD features first, falls back to anchors */
+static int findChildIndexByPrefix(innerNode *inner, const char *prefix, size_t prefix_len) {
+    /* Check against node's common prefix first */
+    if (inner->prefix_len > 0) {
+        size_t cmp_len = inner->prefix_len < prefix_len ? inner->prefix_len : prefix_len;
+        int cmp = memcmp(prefix, inner->embedded_prefix, cmp_len);
+        if (cmp < 0) return 0;
+        if (cmp > 0) return inner->num_anchor_keys;
+    }
+
+    /* Extract target feature bytes from prefix */
+    unsigned char target[FEATURE_SIZE];
+    for (int j = 0; j < FEATURE_SIZE; j++) {
+        size_t idx = inner->prefix_len + j;
+        target[j] = (idx < prefix_len) ? (unsigned char)prefix[idx] : 0;
+    }
+
+    /* Pass 1: SIMD feature search to narrow range */
+    int left, right;
+    featureSearchSIMD(inner->features, inner->num_anchor_keys, target, &left, &right);
+
+    /* Pass 2: Binary search on anchors within narrowed range (handles collisions) */
+    while (left < right) {
+        int mid = (left + right) / 2;
+        int cmp = prefixCmp(inner->anchors[mid], prefix, prefix_len);
+        if (cmp < 0) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    return left;
+}
+
+/* Binary search in leaf for first element with prefix >= given prefix */
+static int leafNodeBinarySearchByPrefix(leafNode *leaf, const char *prefix, size_t prefix_len) {
+    const int count = __builtin_popcountll(leaf->presence_bitmap);
+    int left = 0, right = count;
+    while (left < right) {
+        int mid = (left + right) / 2;
+        if (prefixCmp(leaf->values[mid], prefix, prefix_len) < 0) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    return left;
+}
+
+bool fbtreeLookupByPrefix(fbtreeIndex *fbt, const char *prefix, size_t prefix_len, fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    it->fbt = NULL;
+    it->current_leaf = NULL;
+    it->current_index = 0;
+    it->leaf_count = 0;
+
+    if (!fbt->root || prefix_len == 0) return false;
+
+    node *current = fbt->root;
+
+    while (!current->flags.is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        int child_idx = findChildIndexByPrefix(inner, prefix, prefix_len);
+        if (child_idx >= inner->num_anchor_keys) {
+            /* Prefix is beyond all children - check if last child might have it */
+            child_idx = inner->num_anchor_keys - 1;
+        }
+        current = inner->children[child_idx];
+    }
+
+    leafNode *leaf = (leafNode *)current;
+    leafNodeEnsureSort(leaf);
+    int pos = leafNodeBinarySearchByPrefix(leaf, prefix, prefix_len);
+    int count = __builtin_popcountll(leaf->presence_bitmap);
+
+    /* Check if we found a match */
+    if (pos < count && prefixCmp(leaf->values[pos], prefix, prefix_len) == 0) {
+        it->fbt = fbt;
+        it->current_leaf = leaf;
+        it->leaf_count = count;
+        it->current_index = pos;
+        return true;
+    }
+
+    return false;
+}
+
 /* ========== Debug Functions ========== */
 
 typedef struct {
@@ -956,9 +1204,9 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         bool anchor_ok = (expected == anchor);
         
         /* Validate feature matches anchor */
-        char expected_feature[FEATURE_SIZE];
-        getStringFeature(anchor, inner->prefix_len, expected_feature);
-        bool feature_ok = memcmp(inner->features[i], expected_feature, FEATURE_SIZE) == 0;
+        bool feature_ok = true;
+        for (int j = 0; j < FEATURE_SIZE && feature_ok; j++)
+            feature_ok = (inner->features[j][i] == getFeatureByte(anchor, inner->prefix_len, j));
         
         /* Recursively validate child and get its size */
         if (verbose) {
