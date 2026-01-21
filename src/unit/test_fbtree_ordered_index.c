@@ -32,9 +32,10 @@ static static_string createBase26TestString(const char *prefix, const char *suff
 }
 
 bool is_tree_valid(fbtreeIndex *fbt) {
-    if (!fbtreeDebugValidate(fbt, 0))
-        return fbtreeDebugValidate(fbt, 1);
-    return true;
+    return fbtreeDebugValidate(fbt, false); // TODO temp change - it's impossibly verbose when all tests fail.
+    // if (!fbtreeDebugValidate(fbt, false))
+    //     return fbtreeDebugValidate(fbt, true);
+    // return true;
 }
 
 int test_fbtree_create_and_free(int argc, char **argv, int flags) {
@@ -2069,6 +2070,188 @@ int test_fbtree_rank_deep_tree(int argc, char **argv, int flags) {
     static_string search = createString("key_02500");
     TEST_ASSERT(fbtreeGetRankOfKey(fbt, search) == 2500);
     ssfree(search);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+/* ========== Prefix Lookup Tests ========== */
+
+int test_fbtree_lookup_by_prefix_basic(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    /* Insert items with common prefixes */
+    const char *items[] = {"abc_001", "abc_002", "abc_003", "def_001", "def_002"};
+    for (int i = 0; i < 5; i++) {
+        static_string str = createString(items[i]);
+        fbtreeInsert(fbt, str);
+        ssfree(str);
+    }
+    
+    fbtreeIterator it;
+    const_static_string pos;
+    
+    /* Find first item with prefix "abc" */
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "abc", 3, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "abc_001", 8) == 0);
+    
+    /* Find first item with prefix "def" */
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "def", 3, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "def_001", 8) == 0);
+    
+    /* Non-existent prefix */
+    TEST_ASSERT(!fbtreeLookupByPrefix(fbt, "xyz", 3, &it));
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_lookup_by_prefix_iterate(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    /* Insert items with common prefixes */
+    const char *items[] = {"aaa", "aab", "aac", "baa", "bab", "bac"};
+    for (int i = 0; i < 6; i++) {
+        static_string str = createString(items[i]);
+        fbtreeInsert(fbt, str);
+        ssfree(str);
+    }
+    
+    fbtreeIterator it;
+    const_static_string pos;
+    
+    /* Find first "aa" and iterate through all "aa" items */
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "aa", 2, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "aaa", 4) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "aab", 4) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "aac", 4) == 0);
+    /* Next item is "baa" which doesn't match prefix */
+    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "baa", 4) == 0);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_lookup_by_prefix_8byte(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    /* Simulate zset-like keys: 8-byte prefix (score) + element */
+    char key[24];
+    for (int i = 0; i < 100; i++) {
+        /* Create key with 8-byte "score" prefix */
+        uint64_t score = (uint64_t)i * 1000;
+        memcpy(key, &score, 8);
+        snprintf(key + 8, 16, "element_%03d", i);
+        static_string str = ssnewlen(key, 8 + strlen(key + 8) + 1);
+        fbtreeInsert(fbt, str);
+        ssfree(str);
+    }
+    
+    fbtreeIterator it;
+    const_static_string pos;
+    
+    /* Lookup by 8-byte score prefix */
+    uint64_t search_score = 50 * 1000;
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, (const char *)&search_score, 8, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    uint64_t found_score;
+    memcpy(&found_score, pos, 8);
+    TEST_ASSERT(found_score == search_score);
+    
+    /* Non-existent score */
+    search_score = 999999;
+    TEST_ASSERT(!fbtreeLookupByPrefix(fbt, (const char *)&search_score, 8, &it));
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_lookup_by_prefix_multilevel(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    /* Insert enough items to create multi-level tree */
+    char buf[16];
+    for (int i = 0; i < 200; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        static_string str = createString(buf);
+        fbtreeInsert(fbt, str);
+        ssfree(str);
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+    
+    fbtreeIterator it;
+    const_static_string pos;
+    
+    /* Find first item with prefix "key_05" */
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "key_05", 6, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "key_050", 8) == 0);
+    
+    /* Find first item with prefix "key_1" */
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "key_1", 5, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "key_100", 8) == 0);
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_lookup_by_prefix_empty(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    fbtreeIterator it;
+    
+    /* Lookup in empty tree */
+    TEST_ASSERT(!fbtreeLookupByPrefix(fbt, "abc", 3, &it));
+    
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_lookup_by_prefix_single_char(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    
+    const char *items[] = {"apple", "banana", "cherry"};
+    for (int i = 0; i < 3; i++) {
+        static_string str = createString(items[i]);
+        fbtreeInsert(fbt, str);
+        ssfree(str);
+    }
+    
+    fbtreeIterator it;
+    const_static_string pos;
+    
+    /* Single character prefix */
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "b", 1, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "banana", 7) == 0);
+    
+    TEST_ASSERT(fbtreeLookupByPrefix(fbt, "c", 1, &it));
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
+    
+    /* No items starting with 'd' */
+    TEST_ASSERT(!fbtreeLookupByPrefix(fbt, "d", 1, &it));
     
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
