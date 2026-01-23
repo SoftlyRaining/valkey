@@ -18,7 +18,7 @@ typedef uint64_t fbtreeIterator[3];
 
 /* Internal API for testing */
 fbtreeIndex *fbtreeCreate(void);
-void fbtreeInsert(fbtreeIndex *fbt, const_static_string string);
+static_string fbtreeInsert(fbtreeIndex *fbt, const_static_string string);
 bool fbtreeLookup(fbtreeIndex *fbt, const_static_string key);
 bool fbtreeDelete(fbtreeIndex *fbt, const_static_string key);
 void fbtreeFree(fbtreeIndex *fbt);
@@ -31,6 +31,7 @@ bool fbtreePrev(fbtreeIterator *iterator, const_static_string *pos);
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
 const_static_string fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
 unsigned long fbtreeGetRankOfKey(fbtreeIndex *fbt, const_static_string key);
+unsigned long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item);
 
 /* Prefix lookup - finds first element where first prefix_len bytes match or exceed prefix.
  * Returns true if found, with iterator positioned at that element.
