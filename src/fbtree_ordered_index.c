@@ -94,6 +94,7 @@ typedef struct {
     static_string updated_anchor; /* Pointer to updated anchor string if it's changed */
     node *new_node; /* Pointer to new child node to insert (node split happened) */
     static_string new_node_anchor; /* Pointer to new node's anchor string (node split happened) */
+    static_string inserted_item; /* Pointer to the newly inserted item in the leaf */
 } insertResult;
 
 typedef struct {
@@ -344,6 +345,7 @@ static insertResult leafNodeInsert(leafNode *leaf, const_static_string string) {
         
         /* Insert at position */
         leaf->values[left] = ssdup(string);
+        result.inserted_item = leaf->values[left];
         if (count + 1 == 64)
             leaf->presence_bitmap = ~0ULL; /* all bits set */
         else
@@ -358,6 +360,7 @@ static insertResult leafNodeInsert(leafNode *leaf, const_static_string string) {
         /* Unordered: find first empty slot */
         int slot = __builtin_ctzll(~leaf->presence_bitmap);
         leaf->values[slot] = ssdup(string);
+        result.inserted_item = leaf->values[slot];
         leaf->presence_bitmap |= (1ULL << slot);
 
         /* Update high_key_index if this is larger than current high_key */
@@ -380,7 +383,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, const_static_string strin
     size_t num_left, num_right;
     if (is_append) {
         /* Append pattern: keep left nearly full, new key goes to right */
-        num_left = NODE_SIZE - SPLIT_SMALL_SIDE;
+        num_left = NODE_SIZE - SPLIT_SMALL_SIDE; // TODO: optimization: don't move any to right side, just create a new right node that only contains the new element
         num_right = SPLIT_SMALL_SIDE;
     } else if (is_prepend) {
         /* Prepend pattern: move most to right, new key goes to left */
@@ -410,16 +413,18 @@ static insertResult leafNodeSplit(leafNode *left_leaf, const_static_string strin
     left_leaf->high_key_index = num_left - 1;
 
     /* Insert string into appropriate leaf */
+    insertResult leaf_result;
     if (sscmp(string, leafNodeHighKey(left_leaf)) <= 0) {
-        leafNodeInsert(left_leaf, string);
+        leaf_result = leafNodeInsert(left_leaf, string);
     } else {
-        leafNodeInsert(right_leaf, string);
+        leaf_result = leafNodeInsert(right_leaf, string);
     }
 
     insertResult result = {
         .updated_anchor = leafNodeHighKey(left_leaf),
         .new_node = (node *)right_leaf,
-        .new_node_anchor = leafNodeHighKey(right_leaf)
+        .new_node_anchor = leafNodeHighKey(right_leaf),
+        .inserted_item = leaf_result.inserted_item
     };
     return result;
 }
@@ -651,7 +656,9 @@ static insertResult subtreeInsert(node *n, const_static_string string) {
             /* Our child split - recalculate original child's size since it lost elements */
             parent->child_sizes[child_idx] = getNodeSize(parent->children[child_idx]);
             /* Our child split, and we need to insert the new child just after the existing one */
-            return innerNodeHandleChildSplit(parent, child_insert_result.new_node, child_insert_result.new_node_anchor, child_idx + 1);
+            insertResult result = innerNodeHandleChildSplit(parent, child_insert_result.new_node, child_insert_result.new_node_anchor, child_idx + 1);
+            result.inserted_item = child_insert_result.inserted_item;
+            return result;
         } else {
             /* No split - just increment size for the inserted element */
             parent->child_sizes[child_idx]++;
@@ -659,13 +666,14 @@ static insertResult subtreeInsert(node *n, const_static_string string) {
             bool parent_anchor_changed = (child_idx == parent->num_anchor_keys - 1);
             insertResult result = {
                 .updated_anchor = parent_anchor_changed ? parent->anchors[child_idx] : NULL,
+                .inserted_item = child_insert_result.inserted_item,
             };
             return result;
         }
     }
 }
 
-void fbtreeInsert(fbtreeIndex *fbt, const_static_string string) {
+static_string fbtreeInsert(fbtreeIndex *fbt, const_static_string string) {
     // TODO: handle overflow when tree exceeds UINT32_MAX elements
     assert(fbt->length < UINT32_MAX);
 
@@ -680,6 +688,7 @@ void fbtreeInsert(fbtreeIndex *fbt, const_static_string string) {
         fbt->root = (node *)new_root;
     }
     fbt->length++;
+    return result.inserted_item;
 }
 
 static bool leafNodeLookup(leafNode *leaf, const_static_string key) {
@@ -887,10 +896,40 @@ unsigned long fbtreeGetRankOfKey(fbtreeIndex *fbt, const_static_string key) {
     return rank + pos;
 }
 
+/* Get rank of an item given a direct pointer to it (from hashtable lookup).
+ * The item pointer must be a valid pointer into a leaf node's values array. */
+unsigned long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item) {
+    if (!fbt->root || !item) return fbt->length;
+
+    unsigned long rank = 0;
+    node *current = fbt->root;
+
+    while (!current->flags.is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        int child_idx = findChildIndex(inner, item);
+        if (child_idx >= inner->num_anchor_keys) return fbt->length;
+        
+        for (int i = 0; i < child_idx; i++) {
+            rank += inner->child_sizes[i];
+        }
+        current = inner->children[child_idx];
+    }
+
+    leafNode *leaf = (leafNode *)current;
+    leafNodeEnsureSort(leaf);
+    int count = __builtin_popcountll(leaf->presence_bitmap);
+    
+    /* Find position by pointer comparison (item is known to be in this leaf) */
+    for (int i = 0; i < count; i++) {
+        if (leaf->values[i] == item) {
+            return rank + i;
+        }
+    }
+    return fbt->length; /* Not found */
+}
+
 static unsigned long fbtreeGetRank(OrderedIndex *idx, const OrderedIndexItem *pos) {
-    UNUSED(idx); UNUSED(pos);
-    assert(false); // TODO: implement get rank from item pointer
-    return 0;
+    return fbtreeGetRankOfItem((fbtreeIndex *)idx, (const_static_string)pos);
 }
 
 unsigned long fbtreeLength(fbtreeIndex *fbt) {
