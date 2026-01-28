@@ -20,7 +20,7 @@ typedef struct OrderedIndexOps {
     
     /* Query by rank (1-based) */
     OrderedIndexItem *(*get_by_rank)(OrderedIndex *idx, unsigned long rank);
-    unsigned long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
+    long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
     
     /* Metadata */
     unsigned long (*length)(OrderedIndex *idx);
@@ -71,7 +71,7 @@ static inline OrderedIndexItem *orderedIndexGetByRank(const OrderedIndexOps *ops
     return ops->get_by_rank(idx, rank);
 }
 
-static inline unsigned long orderedIndexGetRank(const OrderedIndexOps *ops, OrderedIndex *idx, const OrderedIndexItem *pos) {
+static inline long orderedIndexGetRank(const OrderedIndexOps *ops, OrderedIndex *idx, const OrderedIndexItem *pos) {
     return ops->get_rank(idx, pos);
 }
 

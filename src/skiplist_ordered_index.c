@@ -23,8 +23,8 @@ static OrderedIndexItem *skiplistGetByRank(OrderedIndex *idx, unsigned long rank
     return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)idx, rank);
 }
 
-static unsigned long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
-    return zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
+static long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
+    return (long)zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
 }
 
 static unsigned long skiplistLength(OrderedIndex *idx) {
