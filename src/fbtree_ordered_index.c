@@ -81,10 +81,10 @@ static_assert(sizeof(fbtreeIterator) >= sizeof(iter), "Opaque iterator size chec
 static_assert(sizeof(OrderedIndexIterator) >= sizeof(iter), "Opaque iterator size check");
 
 typedef struct {
-    static_string updated_anchor; /* Pointer to updated anchor string if it's changed */
-    node *new_node; /* Pointer to new child node to insert (node split happened) */
+    static_string updated_anchor;  /* Pointer to updated anchor string if it's changed */
+    node *new_node;                /* Pointer to new child node to insert (node split happened) */
     static_string new_node_anchor; /* Pointer to new node's anchor string (node split happened) */
-    static_string inserted_item; /* Pointer to the newly inserted item in the leaf */
+    static_string inserted_item;   /* Pointer to the newly inserted item in the leaf */
 } insertResult;
 
 /* Hint for optimized insert path - allows skipping inner node searches */
@@ -96,7 +96,7 @@ typedef enum {
 
 typedef struct {
     static_string updated_anchor; /* Pointer to updated anchor string if it's changed */
-    bool delete_executed; /* True if key was found and deleted, False if not found no-op */
+    bool delete_executed;         /* True if key was found and deleted, False if not found no-op */
     // TODO: implement merging: bool node_underflowed; /* True if root of subtree has underflowed and should be merged with a sibling */
 } deleteResult;
 
@@ -201,7 +201,7 @@ static void updateCommonPrefix(innerNode *inner) {
     while (len < max_len && first_anchor[len] == last_anchor[len]) len++;
 
     bool prefix_changed = (len != inner->prefix_len) ||
-                           (len > 0 && memcmp(inner->embedded_prefix, first_anchor, len) != 0);
+                          (len > 0 && memcmp(inner->embedded_prefix, first_anchor, len) != 0);
     if (prefix_changed) {
         memcpy(inner->embedded_prefix, first_anchor, len);
         inner->prefix_len = len;
@@ -249,7 +249,7 @@ static bool innerNodeInsert(innerNode *parent, const node *child, static_string 
     if (insert_index == 0 || insert_index + 1 == parent->header.num_items) {
         updateCommonPrefix(parent);
     }
-    
+
     bool anchor_changed = (num_to_move == 0);
     return anchor_changed;
 }
@@ -300,13 +300,12 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string string) {
 
     insertResult result = {
         .inserted_item = string,
-        .updated_anchor = (insert_index == count) ? string : NULL
-    };
-    
+        .updated_anchor = (insert_index == count) ? string : NULL};
+
     /* Shift elements right to make space */
-    memmove(&leaf->values[insert_index + 1], &leaf->values[insert_index], 
+    memmove(&leaf->values[insert_index + 1], &leaf->values[insert_index],
             (count - insert_index) * sizeof(static_string));
-    
+
     /* Insert at position - take ownership */
     leaf->values[insert_index] = string;
     leaf->header.num_items++;
@@ -335,8 +334,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string string) {
         return (insertResult){
             .new_node = (node *)right_leaf,
             .new_node_anchor = string,
-            .inserted_item = right_leaf->values[0]
-        };
+            .inserted_item = right_leaf->values[0]};
     }
 
     if (insert_index == 0) {
@@ -351,8 +349,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string string) {
             .updated_anchor = string,
             .new_node = (node *)right_leaf,
             .new_node_anchor = leafNodeHighKey(right_leaf),
-            .inserted_item = left_leaf->values[0]
-        };
+            .inserted_item = left_leaf->values[0]};
     }
 
     /* Middle insert: standard 50/50 split */
@@ -367,15 +364,14 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string string) {
 
     /* Insert into appropriate leaf */
     insertResult leaf_result = (insert_index <= (int)num_left)
-        ? leafNodeInsert(left_leaf, string)
-        : leafNodeInsert(right_leaf, string);
+                                   ? leafNodeInsert(left_leaf, string)
+                                   : leafNodeInsert(right_leaf, string);
 
     return (insertResult){
         .updated_anchor = leafNodeHighKey(left_leaf),
         .new_node = (node *)right_leaf,
         .new_node_anchor = leafNodeHighKey(right_leaf),
-        .inserted_item = leaf_result.inserted_item
-    };
+        .inserted_item = leaf_result.inserted_item};
 }
 
 /* SIMD feature search: finds range [out_left, out_right) of keys matching target.
@@ -385,8 +381,10 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string string) {
 
 ATTRIBUTE_TARGET_AVX2
 static void featureSearchSIMD_avx2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                   int num_keys, const unsigned char target[FEATURE_SIZE],
-                                   int *out_left, int *out_right) {
+                                   int num_keys,
+                                   const unsigned char target[FEATURE_SIZE],
+                                   int *out_left,
+                                   int *out_right) {
     uint64_t valid_mask = (num_keys >= 64) ? ~0ULL : (1ULL << num_keys) - 1;
     uint64_t ge_mask = valid_mask;
     uint64_t le_mask = valid_mask;
@@ -417,8 +415,10 @@ static void featureSearchSIMD_avx2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE]
 
 ATTRIBUTE_TARGET_SSE2
 static void featureSearchSIMD_sse2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                   int num_keys, const unsigned char target[FEATURE_SIZE],
-                                   int *out_left, int *out_right) {
+                                   int num_keys,
+                                   const unsigned char target[FEATURE_SIZE],
+                                   int *out_left,
+                                   int *out_right) {
     uint64_t valid_mask = (num_keys >= 64) ? ~0ULL : (1ULL << num_keys) - 1;
     uint64_t ge_mask = valid_mask;
     uint64_t le_mask = valid_mask;
@@ -447,8 +447,10 @@ static void featureSearchSIMD_sse2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE]
 }
 
 static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                              int num_keys, const unsigned char target[FEATURE_SIZE],
-                              int *out_left, int *out_right) {
+                              int num_keys,
+                              const unsigned char target[FEATURE_SIZE],
+                              int *out_left,
+                              int *out_right) {
     if (__builtin_cpu_supports("avx2")) {
         featureSearchSIMD_avx2(features, num_keys, target, out_left, out_right);
     } else {
@@ -462,10 +464,12 @@ static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
 #else
 /* Scalar fallback - features are stored pre-biased, so bias target for comparison */
 static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                              int num_keys, const unsigned char target[FEATURE_SIZE],
-                              int *out_left, int *out_right) {
+                              int num_keys,
+                              const unsigned char target[FEATURE_SIZE],
+                              int *out_left,
+                              int *out_right) {
     int left = 0, right = num_keys;
-    
+
     /* Find leftmost position where target <= feature (lower bound) */
     for (int i = 0; i < num_keys; i++) {
         int cmp = 0;
@@ -479,7 +483,7 @@ static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
         }
         left = i + 1;
     }
-    
+
     /* Find rightmost position where target >= feature (upper bound) */
     right = left;
     for (int i = left; i < num_keys; i++) {
@@ -491,7 +495,7 @@ static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
         if (cmp < 0) break;
         right = i + 1;
     }
-    
+
     *out_left = left;
     *out_right = right;
 }
@@ -499,21 +503,27 @@ static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
 
 /* Test wrappers to expose static functions for unit testing */
 void featureSearchSIMD_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                    int num_keys, const unsigned char target[FEATURE_SIZE],
-                                    int *out_left, int *out_right) {
+                                    int num_keys,
+                                    const unsigned char target[FEATURE_SIZE],
+                                    int *out_left,
+                                    int *out_right) {
     featureSearchSIMD(features, num_keys, target, out_left, out_right);
 }
 
 #if HAVE_X86_SIMD
 void featureSearchSIMD_avx2_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                         int num_keys, const unsigned char target[FEATURE_SIZE],
-                                         int *out_left, int *out_right) {
+                                         int num_keys,
+                                         const unsigned char target[FEATURE_SIZE],
+                                         int *out_left,
+                                         int *out_right) {
     featureSearchSIMD_avx2(features, num_keys, target, out_left, out_right);
 }
 
 void featureSearchSIMD_sse2_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                         int num_keys, const unsigned char target[FEATURE_SIZE],
-                                         int *out_left, int *out_right) {
+                                         int num_keys,
+                                         const unsigned char target[FEATURE_SIZE],
+                                         int *out_left,
+                                         int *out_right) {
     featureSearchSIMD_sse2(features, num_keys, target, out_left, out_right);
 }
 #endif
@@ -542,7 +552,7 @@ static int findChildIndex(innerNode *inner, const_static_string string) {
     /* Pass 1: SIMD feature search to narrow range */
     int left, right;
     featureSearchSIMD(inner->features, inner->header.num_items, target, &left, &right);
-    
+
     /* TODO: consider scalar path for small num_anchor_keys */
 
     /* Pass 2: Binary search on anchors within narrowed range (handles collisions) */
@@ -574,8 +584,7 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
         insertResult result = {
             .updated_anchor = parent->anchors[parent->header.num_items - 1],
             .new_node = (node *)new_right_parent,
-            .new_node_anchor = new_right_parent->anchors[new_right_parent->header.num_items - 1]
-        };
+            .new_node_anchor = new_right_parent->anchors[new_right_parent->header.num_items - 1]};
         return result;
     } else {
         /* We're not full - just insert new child */
@@ -600,7 +609,7 @@ static insertResult subtreeInsert(node *n, static_string string, InsertHint hint
         /* inner node - find correct child for insert */
         innerNode *parent = (innerNode *)n;
         assert(parent->header.num_items > 0);
-        
+
         /* Use hint to skip search when possible */
         int child_idx;
         if (hint == HINT_RIGHTMOST) {
@@ -611,7 +620,7 @@ static insertResult subtreeInsert(node *n, static_string string, InsertHint hint
             child_idx = findChildIndex(parent, string);
             if (child_idx == parent->header.num_items) child_idx--;
         }
-        
+
         insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint);
 
         if (child_insert_result.updated_anchor) {
@@ -667,20 +676,20 @@ static_string fbtreeInsert(fbtreeIndex *fbt, static_string string) {
 
     /* Insert with hint - skips inner node searches for append/prepend */
     insertResult result = subtreeInsert(fbt->root, string, hint);
-    
+
     if (result.new_node) {
         innerNode *new_root = innerNodeCreate();
         static_string left_anchor = result.updated_anchor;
         if (!left_anchor) {
             left_anchor = fbt->root->is_leaf
-                ? leafNodeHighKey((leafNode *)fbt->root)
-                : ((innerNode *)fbt->root)->anchors[((innerNode *)fbt->root)->header.num_items - 1];
+                              ? leafNodeHighKey((leafNode *)fbt->root)
+                              : ((innerNode *)fbt->root)->anchors[((innerNode *)fbt->root)->header.num_items - 1];
         }
         innerNodeInsert(new_root, fbt->root, left_anchor, 0);
         innerNodeInsert(new_root, result.new_node, result.new_node_anchor, 1);
         fbt->root = (node *)new_root;
     }
-    
+
     /* Update leaf caches using linked list - O(1) */
     if (leftmost && leftmost->prev) {
         fbt->leftmost_leaf = leftmost->prev;
@@ -708,13 +717,12 @@ static deleteResult leafNodeDelete(leafNode *leaf, const_static_string item) {
     leaf->header.num_items--;
 
     /* Shift elements to fill the gap */
-    memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1], 
+    memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1],
             (leaf->header.num_items - delete_index) * sizeof(static_string));
-    
+
     deleteResult result = {
         .delete_executed = true,
-        .updated_anchor = (delete_index == leaf->header.num_items) ? leafNodeHighKey(leaf) : NULL
-    };
+        .updated_anchor = (delete_index == leaf->header.num_items) ? leafNodeHighKey(leaf) : NULL};
     return result;
 }
 
@@ -725,7 +733,7 @@ static deleteResult subtreeDelete(node *n, const_static_string item) {
     innerNode *inner = (innerNode *)n;
     int index = findChildIndex(inner, item);
     if (index == inner->header.num_items) return (deleteResult){0};
-    
+
     deleteResult child_result = subtreeDelete(inner->children[index], item);
     if (!child_result.delete_executed) return child_result;
 
@@ -737,14 +745,13 @@ static deleteResult subtreeDelete(node *n, const_static_string item) {
         for (int j = 0; j < FEATURE_SIZE; j++)
             inner->features[j][index] = getFeatureByte(child_result.updated_anchor, inner->prefix_len, j);
     }
-    
+
     // TODO: check if we need to update prefix and features
     // TODO: handle underflow/merging
 
     deleteResult result = {
         .updated_anchor = index == inner->header.num_items - 1 ? child_result.updated_anchor : NULL,
-        .delete_executed = true
-    };
+        .delete_executed = true};
     return result;
 }
 
@@ -800,7 +807,7 @@ long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item) {
         innerNode *inner = (innerNode *)current;
         int child_idx = findChildIndex(inner, item);
         if (child_idx >= inner->header.num_items) return -1;
-        
+
         for (int i = 0; i < child_idx; i++) {
             rank += inner->child_sizes[i];
         }
@@ -808,7 +815,7 @@ long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item) {
     }
 
     leafNode *leaf = (leafNode *)current;
-    
+
     /* Find position by pointer comparison (item is known to be in this leaf) */
     for (int i = 0; i < leaf->header.num_items; i++) {
         if (leaf->values[i] == item) {
@@ -1053,12 +1060,12 @@ static validateResult validateNode(node *n, int depth, size_t parent_prefix_len,
 static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
     uint32_t count = leaf->header.num_items;
     bool valid = (count <= NODE_SIZE);
-    
+
     if (verbose) {
         printf(" Leaf (%u items)\n", count);
         if (!valid) printf(" \033[31m[bad high_key]\033[0m");
         printf("\n");
-        
+
         for (uint32_t i = 0; i < count; i++) {
             if (i % 8 == 0) {
                 printIndent(depth);
@@ -1076,45 +1083,45 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
 static validateResult validateInner(innerNode *inner, int depth, size_t parent_prefix_len, bool verbose) {
     bool valid = inner->prefix_len >= parent_prefix_len;
     uint32_t total_size = 0;
-    
+
     if (verbose) {
         printf(" Inner (prefix=%zu, keys=%d)\n", inner->prefix_len, inner->header.num_items);
     }
-    
+
     for (int i = 0; i < inner->header.num_items; i++) {
         const_static_string anchor = inner->anchors[i];
         node *child = inner->children[i];
-        
+
         /* Validate anchor starts with embedded_prefix */
         bool prefix_ok = sslen(anchor) >= inner->prefix_len &&
                          memcmp(anchor, inner->embedded_prefix, inner->prefix_len) == 0;
-        
+
         /* Validate anchor matches child's high key */
-        const_static_string expected = child->is_leaf 
-            ? leafNodeHighKey((leafNode *)child)
-            : ((innerNode *)child)->anchors[((innerNode *)child)->header.num_items - 1];
+        const_static_string expected = child->is_leaf
+                                           ? leafNodeHighKey((leafNode *)child)
+                                           : ((innerNode *)child)->anchors[((innerNode *)child)->header.num_items - 1];
         bool anchor_ok = (expected == anchor);
-        
+
         /* Validate feature matches anchor */
         bool feature_ok = true;
         for (int j = 0; j < FEATURE_SIZE && feature_ok; j++)
             feature_ok = (inner->features[j][i] == getFeatureByte(anchor, inner->prefix_len, j));
-        
+
         /* Recursively validate child and get its size */
         if (verbose) {
             printIndent(depth);
             printf("\u251c\u2500[%02d] size=%u anchor=", i, inner->child_sizes[i]);
             printBinaryString(anchor);
         }
-        
+
         validateResult child_result = validateNode(child, depth + 1, inner->prefix_len, verbose);
-        
+
         /* Validate stored size matches actual size */
         bool size_ok = (inner->child_sizes[i] == child_result.size);
-        
+
         valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && child_result.valid;
         total_size += child_result.size;
-        
+
         if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok)) {
             printIndent(depth);
             printf("   \033[31m");
@@ -1130,7 +1137,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
 
 static validateResult validateNode(node *n, int depth, size_t parent_prefix_len, bool verbose) {
     if (!n) return (validateResult){.valid = true, .size = 0};
-    
+
     if (n->is_leaf) {
         return validateLeaf((leafNode *)n, depth, verbose);
     } else {
@@ -1142,28 +1149,31 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
     unsigned long length = fbt->root ? getSubtreeSize(fbt->root) : 0;
     if (verbose) printf("FBTree (length=%lu)\n", length);
     if (!fbt->root) return true;
-    
+
     validateResult result = validateNode(fbt->root, 0, 0, verbose);
-    
+
     /* Also verify total size matches computed length */
     bool length_ok = (result.size == length);
     if (!length_ok && verbose) {
         printf("\033[31mERROR: tree size %u != computed length %lu\033[0m\n", result.size, length);
     }
-    
+
     return result.valid && length_ok;
 }
 
 /* Wrapper functions for OrderedIndexOps interface */
 
 static OrderedIndexItem *fbtreeScoreEleInsert(OrderedIndex *idx, double score, const_sds ele) {
-    UNUSED(idx); UNUSED(score); UNUSED(ele);
+    UNUSED(idx);
+    UNUSED(score);
+    UNUSED(ele);
     assert(false); // TODO: implement insert with score/element
     return NULL;
 }
 
 void fbtreeDeleteWrapper(OrderedIndex *idx, OrderedIndexItem *pos) {
-    UNUSED(idx); UNUSED(pos);
+    UNUSED(idx);
+    UNUSED(pos);
     assert(false); // TODO: implement
 }
 
@@ -1181,19 +1191,27 @@ static double fbtreeGetScore(const OrderedIndexItem *pos) {
 }
 
 static OrderedIndexItem *fbtreeUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
-    UNUSED(idx); UNUSED(pos); UNUSED(newscore);
+    UNUSED(idx);
+    UNUSED(pos);
+    UNUSED(newscore);
     assert(false); // TODO: pack score and element into binary string and use as key
     return NULL;
 }
 
 static unsigned long fbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    UNUSED(idx); UNUSED(min); UNUSED(max); UNUSED(min_ex); UNUSED(max_ex);
+    UNUSED(idx);
+    UNUSED(min);
+    UNUSED(max);
+    UNUSED(min_ex);
+    UNUSED(max_ex);
     assert(false); // TODO: pack score and element into binary string and use as key
     return 0;
 }
 
 static unsigned long fbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    UNUSED(idx); UNUSED(start); UNUSED(end);
+    UNUSED(idx);
+    UNUSED(start);
+    UNUSED(end);
     assert(false); // TODO: implement delete range by rank
     return 0;
 }
@@ -1232,7 +1250,12 @@ static void fbtreeSeekToRankWrapper(OrderedIndexIterator *iter, unsigned long ra
 }
 
 static void fbtreeSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    UNUSED(iter); UNUSED(min); UNUSED(max); UNUSED(min_ex); UNUSED(max_ex); UNUSED(offset);
+    UNUSED(iter);
+    UNUSED(min);
+    UNUSED(max);
+    UNUSED(min_ex);
+    UNUSED(max_ex);
+    UNUSED(offset);
     assert(false); // TODO: pack score and element into binary string and use as key
 }
 
