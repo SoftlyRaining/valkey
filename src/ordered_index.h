@@ -13,15 +13,15 @@ typedef struct OrderedIndexOps {
     /* Lifecycle */
     OrderedIndex *(*create)(void);
     void (*free)(OrderedIndex *idx);
-    
+
     /* Modification */
     OrderedIndexItem *(*insert)(OrderedIndex *idx, double score, const_sds ele);
     void (*delete)(OrderedIndex *idx, OrderedIndexItem *pos);
-    
+
     /* Query by rank (1-based) */
     OrderedIndexItem *(*get_by_rank)(OrderedIndex *idx, unsigned long rank);
     long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
-    
+
     /* Metadata */
     unsigned long (*length)(OrderedIndex *idx);
 
@@ -36,10 +36,10 @@ typedef struct OrderedIndexOps {
     /* Position access */
     void (*get_element_raw)(const OrderedIndexItem *pos, const char **ptr, size_t *len);
     double (*get_score)(const OrderedIndexItem *pos);
-    
+
     /* Score update - returns new position (may relocate) */
     OrderedIndexItem *(*update_score)(OrderedIndex *idx, OrderedIndexItem *pos, double newscore);
-    
+
     /* Range deletion - returns count deleted */
     unsigned long (*delete_range_by_score)(OrderedIndex *idx, double min, double max, int min_ex, int max_ex);
     unsigned long (*delete_range_by_rank)(OrderedIndex *idx, unsigned long start, unsigned long end);
@@ -64,7 +64,7 @@ static inline OrderedIndexItem *orderedIndexInsert(const OrderedIndexOps *ops, O
 }
 
 static inline void orderedIndexDelete(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos) {
-    ops->delete(idx, pos);
+    ops->delete (idx, pos);
 }
 
 static inline OrderedIndexItem *orderedIndexGetByRank(const OrderedIndexOps *ops, OrderedIndex *idx, unsigned long rank) {

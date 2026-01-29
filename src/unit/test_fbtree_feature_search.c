@@ -21,29 +21,38 @@ static void initFeatures(char features[FEATURE_SIZE][FEATURE_ROW_SIZE]) {
 
 /* Declare test wrappers - these call actual code in fbtree_ordered_index.c */
 extern void featureSearchSIMD_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                           int num_keys, const unsigned char target[FEATURE_SIZE],
-                                           int *out_left, int *out_right);
+                                           int num_keys,
+                                           const unsigned char target[FEATURE_SIZE],
+                                           int *out_left,
+                                           int *out_right);
 
 #if HAVE_X86_SIMD
 extern void featureSearchSIMD_avx2_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                                int num_keys, const unsigned char target[FEATURE_SIZE],
-                                                int *out_left, int *out_right);
+                                                int num_keys,
+                                                const unsigned char target[FEATURE_SIZE],
+                                                int *out_left,
+                                                int *out_right);
 
 extern void featureSearchSIMD_sse2_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                                int num_keys, const unsigned char target[FEATURE_SIZE],
-                                                int *out_left, int *out_right);
+                                                int num_keys,
+                                                const unsigned char target[FEATURE_SIZE],
+                                                int *out_left,
+                                                int *out_right);
 #endif
 
 typedef void (*FeatureSearchFn)(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                                int num_keys, const unsigned char target[FEATURE_SIZE],
-                                int *out_left, int *out_right);
+                                int num_keys,
+                                const unsigned char target[FEATURE_SIZE],
+                                int *out_left,
+                                int *out_right);
 
 /* Test all available implementations produce identical results */
 static int testAllImpls(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
-                        int num_keys, const unsigned char target[FEATURE_SIZE]) {
+                        int num_keys,
+                        const unsigned char target[FEATURE_SIZE]) {
     int def_left, def_right;
     featureSearchSIMD_test_wrapper(features, num_keys, target, &def_left, &def_right);
-    
+
 #if HAVE_X86_SIMD
     int sse_left, sse_right;
     featureSearchSIMD_sse2_test_wrapper(features, num_keys, target, &sse_left, &sse_right);
@@ -51,7 +60,7 @@ static int testAllImpls(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
         printf("FAIL sse2: got [%d,%d) expected [%d,%d)\n", sse_left, sse_right, def_left, def_right);
         return 1;
     }
-    
+
     if (__builtin_cpu_supports("avx2")) {
         int avx_left, avx_right;
         featureSearchSIMD_avx2_test_wrapper(features, num_keys, target, &avx_left, &avx_right);
@@ -65,7 +74,9 @@ static int testAllImpls(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
 }
 
 int test_feature_search_empty(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     unsigned char target[FEATURE_SIZE] = {0x50, 0, 0, 0};
@@ -74,7 +85,9 @@ int test_feature_search_empty(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_single_match(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x50);
@@ -84,7 +97,9 @@ int test_feature_search_single_match(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_single_less(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x50);
@@ -94,7 +109,9 @@ int test_feature_search_single_less(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_single_greater(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x50);
@@ -104,7 +121,9 @@ int test_feature_search_single_greater(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_three_elements(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x30);
@@ -116,7 +135,9 @@ int test_feature_search_three_elements(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_before_all(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x30);
@@ -128,7 +149,9 @@ int test_feature_search_before_all(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_after_all(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x30);
@@ -140,19 +163,26 @@ int test_feature_search_after_all(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_multibyte(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
-    features[0][0] = BIASED(0x50); features[1][0] = BIASED(0x10);
-    features[0][1] = BIASED(0x50); features[1][1] = BIASED(0x30);
-    features[0][2] = BIASED(0x50); features[1][2] = BIASED(0x50);
+    features[0][0] = BIASED(0x50);
+    features[1][0] = BIASED(0x10);
+    features[0][1] = BIASED(0x50);
+    features[1][1] = BIASED(0x30);
+    features[0][2] = BIASED(0x50);
+    features[1][2] = BIASED(0x50);
     unsigned char target[FEATURE_SIZE] = {0x50, 0x30, 0, 0};
     TEST_ASSERT(testAllImpls(features, 3, target) == 0);
     return 0;
 }
 
 int test_feature_search_duplicates(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x30);
@@ -166,7 +196,9 @@ int test_feature_search_duplicates(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_high_values(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x7F);
@@ -178,7 +210,9 @@ int test_feature_search_high_values(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_boundary_values(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     features[0][0] = BIASED(0x00);
@@ -186,15 +220,16 @@ int test_feature_search_boundary_values(int argc, char **argv, int flags) {
     features[0][2] = BIASED(0x80);
     features[0][3] = BIASED(0xFF);
     unsigned char targets[][FEATURE_SIZE] = {
-        {0x00, 0, 0, 0}, {0x7F, 0, 0, 0}, {0x80, 0, 0, 0}, {0xFF, 0, 0, 0}
-    };
+        {0x00, 0, 0, 0}, {0x7F, 0, 0, 0}, {0x80, 0, 0, 0}, {0xFF, 0, 0, 0}};
     for (int i = 0; i < 4; i++)
         TEST_ASSERT(testAllImpls(features, 4, targets[i]) == 0);
     return 0;
 }
 
 int test_feature_search_full_row(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 60; i++)
@@ -205,7 +240,9 @@ int test_feature_search_full_row(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_all_same(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 10; i++)
@@ -216,7 +253,9 @@ int test_feature_search_all_same(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_multibyte_tiebreak(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 5; i++) {
@@ -229,7 +268,9 @@ int test_feature_search_multibyte_tiebreak(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_all_bytes_matter(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 4; i++) {
@@ -244,7 +285,9 @@ int test_feature_search_all_bytes_matter(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_64_elements(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 64; i++)
@@ -255,7 +298,9 @@ int test_feature_search_64_elements(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_cross_avx_boundary(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 40; i++)
@@ -266,7 +311,9 @@ int test_feature_search_cross_avx_boundary(int argc, char **argv, int flags) {
 }
 
 int test_feature_search_cross_sse_boundary(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     initFeatures(features);
     for (int i = 0; i < 20; i++)

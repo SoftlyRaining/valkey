@@ -45,7 +45,7 @@ int test_static_string_type8(int argc, char **argv, int flags) {
     static_string s = ssnewlen("test", 4);
     TEST_ASSERT(ssType(s) == SS_TYPE_8);
     TEST_ASSERT(sslen(s) == 4);
-    TEST_ASSERT(ssAllocSize(s) == 1 + 4);  /* 1 byte len (includes flags) */
+    TEST_ASSERT(ssAllocSize(s) == 1 + 4); /* 1 byte len (includes flags) */
     ssfree(s);
 
     /* Boundary: 63 bytes (max for 6-bit len) */
@@ -70,7 +70,7 @@ int test_static_string_type16(int argc, char **argv, int flags) {
     static_string s = ssnewlen(buf, 64);
     TEST_ASSERT(ssType(s) == SS_TYPE_16);
     TEST_ASSERT(sslen(s) == 64);
-    TEST_ASSERT(ssAllocSize(s) == 2 + 64);  /* 2 byte len (includes flags) */
+    TEST_ASSERT(ssAllocSize(s) == 2 + 64); /* 2 byte len (includes flags) */
     ssfree(s);
     zfree(buf);
 
@@ -98,7 +98,7 @@ int test_static_string_type32(int argc, char **argv, int flags) {
     static_string s = ssnewlen(buf, len);
     TEST_ASSERT(ssType(s) == SS_TYPE_32);
     TEST_ASSERT(sslen(s) == len);
-    TEST_ASSERT(ssAllocSize(s) == 4 + len);  /* 4 byte len (includes flags) */
+    TEST_ASSERT(ssAllocSize(s) == 4 + len); /* 4 byte len (includes flags) */
     ssfree(s);
     zfree(buf);
 
@@ -186,10 +186,10 @@ int test_static_string_header_sizes(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    TEST_ASSERT(sizeof(struct sshdr8) == 1);   /* 1 len (flags in LSBs) */
-    TEST_ASSERT(sizeof(struct sshdr16) == 2);  /* 2 len (flags in LSBs) */
-    TEST_ASSERT(sizeof(struct sshdr32) == 4);  /* 4 len (flags in LSBs) */
-    TEST_ASSERT(sizeof(struct sshdr64) == 8);  /* 8 len (flags in LSBs) */
+    TEST_ASSERT(sizeof(struct sshdr8) == 1);  /* 1 len (flags in LSBs) */
+    TEST_ASSERT(sizeof(struct sshdr16) == 2); /* 2 len (flags in LSBs) */
+    TEST_ASSERT(sizeof(struct sshdr32) == 4); /* 4 len (flags in LSBs) */
+    TEST_ASSERT(sizeof(struct sshdr64) == 8); /* 8 len (flags in LSBs) */
 
     return 0;
 }
