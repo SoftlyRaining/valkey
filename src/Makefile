@@ -560,6 +560,7 @@ ENGINE_SERVER_OBJ = \
     socket.o \
     sort.o \
     sparkline.o \
+	static_string.o \
     strl.o \
     syncio.o \
     syscheck.o \
