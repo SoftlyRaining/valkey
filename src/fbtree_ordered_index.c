@@ -8,6 +8,7 @@
 #include "ordered_index.h"
 #include "serverassert.h"
 #include "zmalloc.h"
+#include "static_string.h"
 
 /* Anti-warning macro... */
 #ifndef UNUSED
@@ -42,7 +43,7 @@ typedef struct {
     char embedded_prefix[EMBED_PREFIX_LEN]; // TODO: use pointer for larger prefix
     size_t prefix_len;
     char features[NODE_SIZE][FEATURE_SIZE]; // TODO: impl SIMD parallel feature comparison: char features[FEATURE_SIZE][NODE_SIZE];
-    static_string *anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
+    static_string anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
     node *children[NODE_SIZE];
     uint32_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
 } innerNode;
@@ -55,12 +56,12 @@ typedef struct leafNode {
     struct leafNode *prev;
     struct leafNode *next;
     // char tags[NODE_SIZE]; // TODO: add leaf hash tag stuff
-    static_string *values[NODE_SIZE];
+    static_string values[NODE_SIZE];
 } leafNode;
 static_assert(sizeof(leafNode) == 512, "should fit perfectly in 512B size class");
 
 /* Get high_key pointer from leaf node */
-static inline static_string *leafNodeHighKey(leafNode *leaf) {
+static inline static_string leafNodeHighKey(leafNode *leaf) {
     return (leaf->high_key_index < 0) ? NULL : leaf->values[leaf->high_key_index];
 }
 static_assert(NODE_SIZE <= 64, "NODE_SIZE must be <= 64 to fit in presence_bitmap");
@@ -81,13 +82,13 @@ static_assert(sizeof(fbtreeIterator) >= sizeof(iter), "Opaque iterator size chec
 static_assert(sizeof(OrderedIndexIterator) >= sizeof(iter), "Opaque iterator size check");
 
 typedef struct {
-    static_string *updated_anchor; /* Pointer to updated anchor string if it's changed */
+    static_string updated_anchor; /* Pointer to updated anchor string if it's changed */
     node *new_node; /* Pointer to new child node to insert (node split happened) */
-    static_string *new_node_anchor; /* Pointer to new node's anchor string (node split happened) */
+    static_string new_node_anchor; /* Pointer to new node's anchor string (node split happened) */
 } insertResult;
 
 typedef struct {
-    static_string *updated_anchor; /* Pointer to updated anchor string if it's changed */
+    static_string updated_anchor; /* Pointer to updated anchor string if it's changed */
     bool delete_executed; /* True if key was found and deleted, False if not found no-op */
     // TODO: implement merging: bool node_underflowed; /* True if root of subtree has underflowed and should be merged with a sibling */
 } deleteResult;
@@ -95,13 +96,6 @@ typedef struct {
 /* Conversion from user-facing opaque iterator type to internal struct */
 static inline iter *iteratorFromOpaque(fbtreeIterator *iterator) {
     return (iter *)(void *)iterator;
-}
-
-static_string *staticStringCopy(static_string* src) {
-    size_t data_len = sizeof(static_string) + src->len;
-    static_string *copy = zmalloc(data_len);
-    memcpy(copy, src, data_len);
-    return copy;
 }
 
 static innerNode *innerNodeCreate(void) {
@@ -145,7 +139,7 @@ static void freeNodeRecursive(node *n) {
         leafNode *leaf = (leafNode *)n;
         for (int i = 0; i < NODE_SIZE; i++) {
             if (leaf->presence_bitmap & (1ULL << i)) {
-                zfree(leaf->values[i]);
+                ssfree(leaf->values[i]);
             }
         }
         zfree(leaf);
@@ -165,36 +159,20 @@ void fbtreeFree(fbtreeIndex *fbt) {
     zfree(fbt);
 }
 
-/* String comparison for sorting. Returns: <0 if a < b, 0 if a == b, >0 if a > b (standard strcmp convention)
- * For zset entries with packed [normalized_score][element], this provides correct ordering
- * because the score is normalized to sort lexicographically (sign bit flipped, negative values inverted).
- * TODO: Score normalization must use big-endian byte order for cross-platform compatibility.
- *       Ensure normalize/denormalize functions use htonu64/ntohu64 from endianconv.h */
-static int compareStrings(static_string *a, static_string *b) {
-    size_t min_len = a->len < b->len ? a->len : b->len;
-    int cmp = memcmp(a->buf, b->buf, min_len);
-    if (cmp != 0) return cmp;
-    /* Shorter string comes first if prefixes match */
-    return (a->len < b->len) ? -1 : (a->len > b->len) ? 1 : 0;
-}
-
-static bool stringsEqual(static_string *a, static_string *b) {
-    return (a->len == b->len) && (memcmp(a->buf, b->buf, a->len) == 0);
-}
-
-static void getStringFeature(static_string *string, size_t prefix_len, char *feature_out) {
-    size_t feature_size = string->len - prefix_len;
+static void getStringFeature(const_static_string string, size_t prefix_len, char *feature_out) {
+    size_t len = sslen(string);
+    size_t feature_size = len - prefix_len;
     if (feature_size > FEATURE_SIZE) feature_size = FEATURE_SIZE;
-    memcpy(feature_out, string->buf + prefix_len, feature_size);
+    memcpy(feature_out, string + prefix_len, feature_size);
     memset(feature_out + feature_size, 0, FEATURE_SIZE - feature_size);
 }
 
 static void recomputeFeatures(innerNode *inner) {
     for (int i = 0; i < inner->num_anchor_keys; i++) {
-        assert(inner->anchors[i]->len >= inner->prefix_len);
-        size_t feature_size = inner->anchors[i]->len - inner->prefix_len;
+        assert(sslen(inner->anchors[i]) >= inner->prefix_len);
+        size_t feature_size = sslen(inner->anchors[i]) - inner->prefix_len;
         if (feature_size > FEATURE_SIZE) feature_size = FEATURE_SIZE;
-        memcpy(inner->features[i], &inner->anchors[i]->buf[inner->prefix_len], feature_size);
+        memcpy(inner->features[i], inner->anchors[i] + inner->prefix_len, feature_size);
         memset(inner->features[i] + feature_size, 0, FEATURE_SIZE - feature_size);
     }
 }
@@ -203,16 +181,18 @@ static void updateCommonPrefix(innerNode *inner) {
     if (inner->num_anchor_keys < 2) return; // TODO: update for key deletion
     // TODO: if we knew which one updated, we could optimize to avoid one of the anchor key fetches (probably)
 
-    static_string *first_anchor = inner->anchors[0];
-    static_string *last_anchor = inner->anchors[inner->num_anchor_keys - 1];
-    size_t max_len = first_anchor->len < last_anchor->len ? first_anchor->len : last_anchor->len;
+    const_static_string first_anchor = inner->anchors[0];
+    const_static_string last_anchor = inner->anchors[inner->num_anchor_keys - 1];
+    size_t first_len = sslen(first_anchor);
+    size_t last_len = sslen(last_anchor);
+    size_t max_len = first_len < last_len ? first_len : last_len;
     size_t len = 0;
-    while (len < max_len && first_anchor->buf[len] == last_anchor->buf[len]) len++;
+    while (len < max_len && first_anchor[len] == last_anchor[len]) len++;
 
     bool prefix_changed = (len != inner->prefix_len) ||
-                           (len > 0 && memcmp(inner->embedded_prefix, first_anchor->buf, len) != 0);
+                           (len > 0 && memcmp(inner->embedded_prefix, first_anchor, len) != 0);
     if (prefix_changed) {
-        memcpy(inner->embedded_prefix, first_anchor->buf, len);
+        memcpy(inner->embedded_prefix, first_anchor, len);
         inner->prefix_len = len;
         recomputeFeatures(inner);
     }
@@ -233,7 +213,7 @@ static uint32_t getNodeSize(node *n) {
 }
 
 /* Insert a child into an inner node in sorted order. Returns true if parent's anchor/feature needs to be updated */
-static bool innerNodeInsert(innerNode *parent, const node *child, static_string *child_anchor, size_t insert_index) {
+static bool innerNodeInsert(innerNode *parent, const node *child, static_string child_anchor, size_t insert_index) {
     assert(parent->num_anchor_keys < NODE_SIZE);
 
     /* shift higher elements to make space */
@@ -247,7 +227,7 @@ static bool innerNodeInsert(innerNode *parent, const node *child, static_string 
 
     /* insert child */
     getStringFeature(child_anchor, parent->prefix_len, parent->features[insert_index]);
-    parent->anchors[insert_index] = (static_string *)child_anchor;
+    parent->anchors[insert_index] = child_anchor;
     parent->children[insert_index] = (node *)child;
     parent->child_sizes[insert_index] = getNodeSize((node *)child);
     parent->num_anchor_keys++;
@@ -292,7 +272,7 @@ static void leafNodeEnsureSort(leafNode *leaf) {
     const int count = __builtin_popcountll(bitmap);
     
     /* Collect valid entries into temporary array */
-    static_string *temp[NODE_SIZE];
+    static_string temp[NODE_SIZE];
     for (int j = 0; j < count; j++) {
         int i = __builtin_ctzll(bitmap);  // Find lowest set bit
         bitmap &= bitmap - 1;  // Clear lowest set bit
@@ -301,11 +281,11 @@ static void leafNodeEnsureSort(leafNode *leaf) {
     
     /* Insertion sort - optimal for small arrays */
     for (int i = 1; i < count; i++) {
-        static_string *key = temp[i];
+        static_string key = temp[i];
         
         /* Shift elements greater than key to the right */
         int j = i;
-        while (j > 0 && compareStrings(temp[j - 1], key) > 0) {
+        while (j > 0 && sscmp(temp[j - 1], key) > 0) {
             temp[j] = temp[j - 1];
             j--;
         }
@@ -313,18 +293,18 @@ static void leafNodeEnsureSort(leafNode *leaf) {
     }
     
     /* Rebuild array compacted and sorted */
-    memcpy(leaf->values, temp, count * sizeof(static_string *));
+    memcpy(leaf->values, temp, count * sizeof(static_string));
     leaf->presence_bitmap = (count == 64) ? ~0ULL : (1ULL << count) - 1;
     leaf->high_key_index = count - 1; /* After sorting, max is always at end. -1 if count is zero. */
     leaf->flags.is_ordered = 1;
 }
 
-static int leafNodeBinarySearch(leafNode *leaf, static_string *string) {
+static int leafNodeBinarySearch(leafNode *leaf, const_static_string string) {
     const int count = __builtin_popcountll(leaf->presence_bitmap);
     int left = 0, right = count;
     while (left < right) {
         int mid = (left + right) / 2;
-        if (compareStrings(leaf->values[mid], string) < 0) {
+        if (sscmp(leaf->values[mid], string) < 0) {
             left = mid + 1;
         } else {
             right = mid;
@@ -333,7 +313,7 @@ static int leafNodeBinarySearch(leafNode *leaf, static_string *string) {
     return left;
 }
 
-static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
+static insertResult leafNodeInsert(leafNode *leaf, const_static_string string) {
     /* We assume here there is capacity to insert without splitting */
     assert(leaf->presence_bitmap != FULL_PRESENCE_BITMAP);
 
@@ -345,10 +325,10 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
         
         /* Shift elements right to make space */
         memmove(&leaf->values[left + 1], &leaf->values[left], 
-                (count - left) * sizeof(static_string *));
+                (count - left) * sizeof(static_string));
         
         /* Insert at position */
-        leaf->values[left] = staticStringCopy(string);
+        leaf->values[left] = ssdup(string);
         if (count + 1 == 64)
             leaf->presence_bitmap = ~0ULL; /* all bits set */
         else
@@ -362,11 +342,11 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
     } else {
         /* Unordered: find first empty slot */
         int slot = __builtin_ctzll(~leaf->presence_bitmap);
-        leaf->values[slot] = staticStringCopy(string);
+        leaf->values[slot] = ssdup(string);
         leaf->presence_bitmap |= (1ULL << slot);
 
         /* Update high_key_index if this is larger than current high_key */
-        if (leaf->high_key_index < 0 || compareStrings(string, leaf->values[leaf->high_key_index]) > 0) {
+        if (leaf->high_key_index < 0 || sscmp(string, leaf->values[leaf->high_key_index]) > 0) {
             leaf->high_key_index = slot;
             result.updated_anchor = leaf->values[slot];
         }
@@ -374,13 +354,13 @@ static insertResult leafNodeInsert(leafNode *leaf, static_string *string) {
     return result;
 }
 
-static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
+static insertResult leafNodeSplit(leafNode *left_leaf, const_static_string string) {
     leafNodeEnsureSort(left_leaf);
     assert(left_leaf->presence_bitmap == FULL_PRESENCE_BITMAP);
 
     /* Detect append/prepend patterns for asymmetric split optimization */
-    bool is_append = compareStrings(string, left_leaf->values[NODE_SIZE - 1]) > 0;
-    bool is_prepend = compareStrings(string, left_leaf->values[0]) < 0;
+    bool is_append = sscmp(string, left_leaf->values[NODE_SIZE - 1]) > 0;
+    bool is_prepend = sscmp(string, left_leaf->values[0]) < 0;
 
     size_t num_left, num_right;
     if (is_append) {
@@ -406,7 +386,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
     if (right_leaf->next) right_leaf->next->prev = right_leaf;
 
     /* Move elements to new leaf based on split ratio */
-    memcpy(right_leaf->values, &left_leaf->values[num_left], num_right * sizeof(static_string *));
+    memcpy(right_leaf->values, &left_leaf->values[num_left], num_right * sizeof(static_string));
     left_leaf->presence_bitmap = (1ULL << num_left) - 1;
     right_leaf->presence_bitmap = (1ULL << num_right) - 1;
 
@@ -415,7 +395,7 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
     left_leaf->high_key_index = num_left - 1;
 
     /* Insert string into appropriate leaf */
-    if (compareStrings(string, leafNodeHighKey(left_leaf)) <= 0) {
+    if (sscmp(string, leafNodeHighKey(left_leaf)) <= 0) {
         leafNodeInsert(left_leaf, string);
     } else {
         leafNodeInsert(right_leaf, string);
@@ -430,11 +410,11 @@ static insertResult leafNodeSplit(leafNode *left_leaf, static_string *string) {
 }
 
 /* Find child index for insertion using feature vectors and anchors */
-static int findChildIndex(innerNode *inner, static_string *string) {
+static int findChildIndex(innerNode *inner, const_static_string string) {
     /* given string may not share common prefix */
     if (inner->prefix_len > 0) {
         // TODO: long prefix support
-        int cmp = memcmp(string->buf, inner->embedded_prefix, inner->prefix_len);
+        int cmp = memcmp(string, inner->embedded_prefix, inner->prefix_len);
         if (cmp < 0) return 0;
         if (cmp > 0) return inner->num_anchor_keys;
     }
@@ -452,7 +432,7 @@ static int findChildIndex(innerNode *inner, static_string *string) {
         int cmp = memcmp(target_feature, inner->features[mid], FEATURE_SIZE);
         if (cmp == 0) {
             /* Feature collision - compare full anchor key */
-            cmp = compareStrings(string, inner->anchors[mid]);
+            cmp = sscmp(string, inner->anchors[mid]);
         }
         if (cmp <= 0) {
             right = mid;
@@ -463,7 +443,7 @@ static int findChildIndex(innerNode *inner, static_string *string) {
     return left;
 }
 
-static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child, static_string *new_child_anchor, size_t new_child_idx) {
+static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child, static_string new_child_anchor, size_t new_child_idx) {
     if (parent->num_anchor_keys == NODE_SIZE) {
         /* We're full - need to split */
         innerNode *new_right_parent = innerNodeSplit(parent);
@@ -492,7 +472,7 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
     }
 }
 
-static insertResult subtreeInsert(node *n, static_string *string) {
+static insertResult subtreeInsert(node *n, const_static_string string) {
     assert(n);
     if (n->flags.is_leaf) {
         leafNode *leaf = (leafNode *)n;
@@ -537,7 +517,7 @@ static insertResult subtreeInsert(node *n, static_string *string) {
     }
 }
 
-void fbtreeInsert(fbtreeIndex *fbt, static_string *string) {
+void fbtreeInsert(fbtreeIndex *fbt, const_static_string string) {
     // TODO: handle overflow when tree exceeds UINT32_MAX elements
     assert(fbt->length < UINT32_MAX);
 
@@ -554,28 +534,26 @@ void fbtreeInsert(fbtreeIndex *fbt, static_string *string) {
     fbt->length++;
 }
 
-static bool leafNodeLookup(leafNode *leaf, static_string *key) {
+static bool leafNodeLookup(leafNode *leaf, const_static_string key) {
     if (leaf->flags.is_ordered) {
         // TODO: is this actually faster than a linear scan?
         int pos = leafNodeBinarySearch(leaf, key);
         const int count = __builtin_popcountll(leaf->presence_bitmap);
-        return pos < count && stringsEqual(leaf->values[pos], key);
+        return pos < count && sseq(leaf->values[pos], key);
     } else {
         /* Linear scan for unordered nodes */
         // TODO: only iterate set bits
         for (int i = 0; i < NODE_SIZE; i++) {
             if (leaf->presence_bitmap & (1ULL << i)) {
-                static_string *str = leaf->values[i];
-                if (str->len == key->len && memcmp(str->buf, key->buf, key->len) == 0) {
-                    return true;
-                }
+                const_static_string str = leaf->values[i];
+                if (sseq(str, key)) return true;
             }
         }
     }
     return false;
 }
 
-bool fbtreeLookup(fbtreeIndex *fbt, static_string *key) {
+bool fbtreeLookup(fbtreeIndex *fbt, const_static_string key) {
     if (fbt->root == NULL) return false;
     
     node *current = fbt->root;
@@ -590,15 +568,15 @@ bool fbtreeLookup(fbtreeIndex *fbt, static_string *key) {
     return leafNodeLookup(leaf, key);
 }
 
-static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
+static deleteResult leafNodeDelete(leafNode *leaf, const_static_string key) {
     int count = __builtin_popcountll(leaf->presence_bitmap);
     assert(count > 0);
 
     if (leaf->flags.is_ordered) {
         const int delete_index = leafNodeBinarySearch(leaf, key);
-        if (delete_index >= count || !stringsEqual(leaf->values[delete_index], key)) return (deleteResult){0};
+        if (delete_index >= count || !sseq(leaf->values[delete_index], key)) return (deleteResult){0};
 
-        zfree(leaf->values[delete_index]);
+        ssfree(leaf->values[delete_index]);
         deleteResult result = {
             .delete_executed = true
         };
@@ -606,7 +584,7 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
 
         /* Shift elements to fill the gap */
         size_t num_to_shift = count - delete_index;
-        memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1], num_to_shift * sizeof(static_string *));
+        memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1], num_to_shift * sizeof(static_string));
 
         /* Update presence bitmap */
         leaf->presence_bitmap = (1ULL << count) - 1;
@@ -623,9 +601,8 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
         // TODO: only iterate set bits
         for (int i = 0; i < NODE_SIZE; i++) {
             if (leaf->presence_bitmap & (1ULL << i)) {
-                static_string *str = leaf->values[i];
-                if (stringsEqual(str, key)) {
-                    zfree(str);
+                if (sseq(leaf->values[i], key)) {
+                    ssfree(leaf->values[i]);
                     leaf->presence_bitmap &= ~(1ULL << i);
                     deleteResult result = {
                         .delete_executed = true,
@@ -644,7 +621,7 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
                             if (leaf->presence_bitmap & (1ULL << j)) {
                                 if (max_index < 0) {
                                     max_index = j;
-                                } else if (compareStrings(leaf->values[j], leaf->values[max_index]) > 0) {
+                                } else if (sscmp(leaf->values[j], leaf->values[max_index]) > 0) {
                                     max_index = j;
                                 }
                             }
@@ -661,7 +638,7 @@ static deleteResult leafNodeDelete(leafNode *leaf, static_string *key) {
     }
 }
 
-static deleteResult subtreeDelete(node *n, static_string *key) {
+static deleteResult subtreeDelete(node *n, const_static_string key) {
     if (n->flags.is_leaf)
         return leafNodeDelete((leafNode *)n, key);
 
@@ -691,7 +668,7 @@ static deleteResult subtreeDelete(node *n, static_string *key) {
 }
 
 /* Returns false if element was not found and deleted */
-bool fbtreeDelete(fbtreeIndex *fbt, static_string *key) {
+bool fbtreeDelete(fbtreeIndex *fbt, const_static_string key) {
     if (fbt->root == NULL) return false;
 
     deleteResult result = subtreeDelete(fbt->root, key);
@@ -704,7 +681,7 @@ bool fbtreeDelete(fbtreeIndex *fbt, static_string *key) {
 }
 
 /* Get element at given rank (0-indexed). Returns NULL if rank >= length */
-static_string *fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank) {
+const_static_string fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank) {
     if (!fbt->root || rank >= fbt->length) return NULL;
 
     node *current = fbt->root;
@@ -733,7 +710,7 @@ static OrderedIndexItem *fbtreeGetByRank(OrderedIndex *idx, unsigned long rank) 
 }
 
 /* Get rank of an element by key. Returns fbt->length if not found */
-unsigned long fbtreeGetRankOfKey(fbtreeIndex *fbt, static_string *key) {
+unsigned long fbtreeGetRankOfKey(fbtreeIndex *fbt, const_static_string key) {
     if (!fbt->root) return fbt->length;
 
     unsigned long rank = 0;
@@ -755,7 +732,7 @@ unsigned long fbtreeGetRankOfKey(fbtreeIndex *fbt, static_string *key) {
     leafNodeEnsureSort(leaf);
     int pos = leafNodeBinarySearch(leaf, key);
     int count = __builtin_popcountll(leaf->presence_bitmap);
-    if (pos >= count || !stringsEqual(leaf->values[pos], key)) {
+    if (pos >= count || !sseq(leaf->values[pos], key)) {
         return fbt->length; /* Not found */ // TODO should we return the rank of the item if it were present?
     }
     return rank + pos;
@@ -808,7 +785,7 @@ void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt) {
     it->leaf_count = 0;
 }
 
-bool fbtreeNext(fbtreeIterator *iterator, static_string **pos) {
+bool fbtreeNext(fbtreeIterator *iterator, const_static_string *pos) {
     iter *it = iteratorFromOpaque(iterator);
     if (!it->fbt) return false;
     if (!it->current_leaf) {
@@ -831,7 +808,7 @@ bool fbtreeNext(fbtreeIterator *iterator, static_string **pos) {
     return false;
 }
 
-bool fbtreePrev(fbtreeIterator *iterator, static_string **pos) {
+bool fbtreePrev(fbtreeIterator *iterator, const_static_string *pos) {
     iter *it = iteratorFromOpaque(iterator);
     if (!it->fbt) return false;
     if (!it->current_leaf) {
@@ -893,9 +870,10 @@ typedef struct {
     uint32_t size;
 } validateResult;
 
-static void printBinaryString(const char *buf, size_t len) {
+static void printBinaryString(const_static_string s) {
+    size_t len = sslen(s);
     for (size_t i = 0; i < len; i++) {
-        char c = buf[i];
+        char c = s[i];
         if (c >= 32 && c < 127) {
             printf("%c", c);
         } else {
@@ -915,7 +893,7 @@ static bool validateLeafHighKey(leafNode *leaf) {
     if (count == 0) return leaf->high_key_index < 0;
     if (leaf->high_key_index < 0) return false;
     
-    static_string *high_key = leafNodeHighKey(leaf);
+    const_static_string high_key = leafNodeHighKey(leaf);
     if (leaf->flags.is_ordered) {
         return leaf->high_key_index == count - 1;
     }
@@ -925,7 +903,7 @@ static bool validateLeafHighKey(leafNode *leaf) {
     while (bitmap) {
         int idx = __builtin_ctzll(bitmap);
         bitmap &= bitmap - 1;
-        if (compareStrings(leaf->values[idx], high_key) > 0) {
+        if (sscmp(leaf->values[idx], high_key) > 0) {
             return false;
         }
     }
@@ -946,7 +924,7 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
                 printIndent(depth);
                 printf("├─");
             }
-            printBinaryString(leaf->values[i]->buf, leaf->values[i]->len);
+            printBinaryString(leaf->values[i]);
             printf(" ");
             if (i % 8 == 7) printf("\n");
         }
@@ -964,15 +942,15 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
     }
     
     for (int i = 0; i < inner->num_anchor_keys; i++) {
-        static_string *anchor = inner->anchors[i];
+        const_static_string anchor = inner->anchors[i];
         node *child = inner->children[i];
         
         /* Validate anchor starts with embedded_prefix */
-        bool prefix_ok = anchor->len >= inner->prefix_len &&
-                         memcmp(anchor->buf, inner->embedded_prefix, inner->prefix_len) == 0;
+        bool prefix_ok = sslen(anchor) >= inner->prefix_len &&
+                         memcmp(anchor, inner->embedded_prefix, inner->prefix_len) == 0;
         
         /* Validate anchor matches child's high key */
-        static_string *expected = child->flags.is_leaf 
+        const_static_string expected = child->flags.is_leaf 
             ? leafNodeHighKey((leafNode *)child)
             : ((innerNode *)child)->anchors[((innerNode *)child)->num_anchor_keys - 1];
         bool anchor_ok = (expected == anchor);
@@ -986,7 +964,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         if (verbose) {
             printIndent(depth);
             printf("\u251c\u2500[%02d] size=%u anchor=", i, inner->child_sizes[i]);
-            printBinaryString(anchor->buf, anchor->len);
+            printBinaryString(anchor);
         }
         
         validateResult child_result = validateNode(child, depth + 1, inner->prefix_len, verbose);
@@ -1101,11 +1079,11 @@ static void fbtreeResetIteratorWrapper(OrderedIndexIterator *iter) {
 }
 
 static bool fbtreeNextWrapper(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return fbtreeNext((fbtreeIterator *)iter, (static_string **)pos);
+    return fbtreeNext((fbtreeIterator *)iter, (const_static_string *)pos);
 }
 
 static bool fbtreePrevWrapper(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return fbtreePrev((fbtreeIterator *)iter, (static_string **)pos);
+    return fbtreePrev((fbtreeIterator *)iter, (const_static_string *)pos);
 }
 
 static void fbtreeSeekToRankWrapper(OrderedIndexIterator *iter, unsigned long rank) {
