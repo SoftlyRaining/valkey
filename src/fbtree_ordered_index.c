@@ -22,9 +22,9 @@
 #define UNUSED(V) ((void)V)
 #endif
 
-#define NODE_SIZE 60
+#define NODE_SIZE 61
 #define FEATURE_SIZE 4
-#define EMBED_PREFIX_LEN 70
+#define EMBED_PREFIX_LEN 46
 #define FEATURE_ROW_SIZE 64 /* size of cache line */
 
 /* Common header for all node types */
@@ -42,7 +42,7 @@ typedef struct {
     node *children[NODE_SIZE];
     uint32_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
 } innerNode;
-static_assert(sizeof(innerNode) == 1536, "should fit perfectly in jemalloc size class"); // TODO: double check this
+static_assert(sizeof(innerNode) == 1536, "should fit perfectly in jemalloc size class");
 static_assert(NODE_SIZE <= FEATURE_ROW_SIZE, "NODE_SIZE must fit in feature row");
 
 typedef struct leafNode {
@@ -52,7 +52,7 @@ typedef struct leafNode {
     // char tags[NODE_SIZE]; // TODO: add leaf hash tag stuff
     static_string values[NODE_SIZE];
 } leafNode;
-// TODO: size changed after simplifying. Tune for jemalloc size class again
+static_assert(sizeof(leafNode) == 512, "should fit perfectly in jemalloc size class");
 
 /* Get low_key (minimum) from leaf node - leaves are always kept sorted */
 static inline static_string leafNodeLowKey(leafNode *leaf) {
@@ -532,11 +532,14 @@ void featureSearchSIMD_sse2_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW
  * Two-pass approach:
  * 1. SIMD pass: narrow candidates using feature comparison
  * 2. Anchor pass: binary search on anchors within narrowed range (only if needed)
+ *
+ * validated_len: bytes already validated by ancestors - skip comparing these.
  */
-static int findChildIndex(innerNode *inner, const_static_string string) {
-    /* Check common prefix first */
-    if (inner->prefix_len > 0) {
-        int cmp = memcmp(string, inner->embedded_prefix, inner->prefix_len);
+static int findChildIndex(innerNode *inner, const_static_string string, size_t validated_len) {
+    /* Only compare prefix bytes beyond what ancestors already validated */
+    if (inner->prefix_len > validated_len) {
+        size_t cmp_len = inner->prefix_len - validated_len;
+        int cmp = memcmp(string + validated_len, inner->embedded_prefix + validated_len, cmp_len);
         if (cmp < 0) return 0;
         if (cmp > 0) return inner->header.num_items;
     }
@@ -596,7 +599,7 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
     }
 }
 
-static insertResult subtreeInsert(node *n, static_string string, InsertHint hint) {
+static insertResult subtreeInsert(node *n, static_string string, InsertHint hint, size_t validated_len) {
     assert(n);
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
@@ -617,11 +620,12 @@ static insertResult subtreeInsert(node *n, static_string string, InsertHint hint
         } else if (hint == HINT_LEFTMOST) {
             child_idx = 0;
         } else {
-            child_idx = findChildIndex(parent, string);
+            child_idx = findChildIndex(parent, string, validated_len);
             if (child_idx == parent->header.num_items) child_idx--;
         }
 
-        insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint);
+        /* Pass this node's prefix_len to child - it's now validated */
+        insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint, parent->prefix_len);
 
         if (child_insert_result.updated_anchor) {
             parent->anchors[child_idx] = child_insert_result.updated_anchor;
@@ -675,7 +679,7 @@ static_string fbtreeInsert(fbtreeIndex *fbt, static_string string) {
     }
 
     /* Insert with hint - skips inner node searches for append/prepend */
-    insertResult result = subtreeInsert(fbt->root, string, hint);
+    insertResult result = subtreeInsert(fbt->root, string, hint, 0);
 
     if (result.new_node) {
         innerNode *new_root = innerNodeCreate();
@@ -731,7 +735,7 @@ static deleteResult subtreeDelete(node *n, const_static_string item) {
         return leafNodeDelete((leafNode *)n, item);
 
     innerNode *inner = (innerNode *)n;
-    int index = findChildIndex(inner, item);
+    int index = findChildIndex(inner, item, 0);
     if (index == inner->header.num_items) return (deleteResult){0};
 
     deleteResult child_result = subtreeDelete(inner->children[index], item);
@@ -802,15 +806,17 @@ long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item) {
 
     long rank = 0;
     node *current = fbt->root;
+    size_t validated_len = 0;
 
     while (!current->is_leaf) {
         innerNode *inner = (innerNode *)current;
-        int child_idx = findChildIndex(inner, item);
+        int child_idx = findChildIndex(inner, item, validated_len);
         if (child_idx >= inner->header.num_items) return -1;
 
         for (int i = 0; i < child_idx; i++) {
             rank += inner->child_sizes[i];
         }
+        validated_len = inner->prefix_len;
         current = inner->children[child_idx];
     }
 
@@ -936,92 +942,84 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
     it->current_index = (uint8_t)remaining;
 }
 
-/* Compare a string's prefix against a given prefix buffer.
- * Returns <0 if string prefix < prefix, 0 if equal, >0 if string prefix > prefix */
-static inline int prefixCmp(const_static_string string, const char *prefix, size_t prefix_len) {
-    size_t str_len = sslen(string);
-    size_t cmp_len = str_len < prefix_len ? str_len : prefix_len;
-    int cmp = memcmp(string, prefix, cmp_len);
-    if (cmp != 0) return cmp;
-    /* If string is shorter than prefix, it's "less than" */
-    if (str_len < prefix_len) return -1;
-    return 0;
-}
+#define SCORE_SIZE 8 /* 8-byte normalized score prefix */
 
-/* Find child index for prefix lookup - uses SIMD features first, falls back to anchors */
-static int findChildIndexByPrefix(innerNode *inner, const char *prefix, size_t prefix_len) {
-    /* Check against node's common prefix first */
-    if (inner->prefix_len > 0) {
-        size_t cmp_len = inner->prefix_len < prefix_len ? inner->prefix_len : prefix_len;
-        int cmp = memcmp(prefix, inner->embedded_prefix, cmp_len);
-        if (cmp < 0) return 0;
-        if (cmp > 0) return inner->header.num_items;
+/* Find child index for score lookup (8-byte prefix). Optimized: no bounds checking.
+ * validated_len: score bytes already matched by ancestors - skip comparing these. */
+static int findChildIndexByScore(innerNode *inner, const char *score, size_t validated_len) {
+    /* Compare unvalidated prefix bytes (up to 8) */
+    if (inner->prefix_len > validated_len) {
+        size_t cmp_len = (inner->prefix_len < SCORE_SIZE ? inner->prefix_len : SCORE_SIZE) - validated_len;
+        if (cmp_len > 0) {
+            int cmp = memcmp(score + validated_len, inner->embedded_prefix + validated_len, cmp_len);
+            if (cmp < 0) return 0;
+            if (cmp > 0) return inner->header.num_items;
+        }
     }
 
-    /* Extract target feature bytes from prefix */
+    /* If node prefix covers entire score, first child has first match */
+    if (inner->prefix_len >= SCORE_SIZE) return 0;
+
+    /* Extract feature bytes - no bounds check, score is always 8 bytes */
     unsigned char target[FEATURE_SIZE];
-    for (int j = 0; j < FEATURE_SIZE; j++) {
-        size_t idx = inner->prefix_len + j;
-        target[j] = (idx < prefix_len) ? (unsigned char)prefix[idx] : 0;
-    }
+    for (int j = 0; j < FEATURE_SIZE; j++)
+        target[j] = (unsigned char)score[inner->prefix_len + j];
 
-    /* Pass 1: SIMD feature search to narrow range */
     int left, right;
     featureSearchSIMD(inner->features, inner->header.num_items, target, &left, &right);
 
-    /* Pass 2: Binary search on anchors within narrowed range (handles collisions) */
+    /* Binary search with fixed 8-byte comparison */
     while (left < right) {
         int mid = (left + right) / 2;
-        int cmp = prefixCmp(inner->anchors[mid], prefix, prefix_len);
-        if (cmp < 0) {
+        if (memcmp(inner->anchors[mid], score, SCORE_SIZE) < 0)
             left = mid + 1;
-        } else {
+        else
             right = mid;
-        }
     }
     return left;
 }
 
-/* Binary search in leaf for first element with prefix >= given prefix */
-static int leafNodeBinarySearchByPrefix(leafNode *leaf, const char *prefix, size_t prefix_len) {
+/* Binary search in leaf for first element with score >= given score */
+static int leafNodeBinarySearchByScore(leafNode *leaf, const char *score) {
     int left = 0, right = leaf->header.num_items;
     while (left < right) {
         int mid = (left + right) / 2;
-        if (prefixCmp(leaf->values[mid], prefix, prefix_len) < 0) {
+        if (memcmp(leaf->values[mid], score, SCORE_SIZE) < 0)
             left = mid + 1;
-        } else {
+        else
             right = mid;
-        }
     }
     return left;
 }
 
-bool fbtreeLookupByPrefix(fbtreeIndex *fbt, const char *prefix, size_t prefix_len, fbtreeIterator *iterator) {
+/* Lookup by 8-byte score prefix. Positions iterator at first matching element.
+ * Returns true if found, false if no element with this score exists. */
+bool fbtreeLookupByScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
     it->fbt = NULL;
     it->current_leaf = NULL;
     it->current_index = 0;
     it->leaf_count = 0;
 
-    if (!fbt->root || prefix_len == 0) return false;
+    if (!fbt->root) return false;
 
     node *current = fbt->root;
+    size_t validated_len = 0;
 
     while (!current->is_leaf) {
         innerNode *inner = (innerNode *)current;
-        int child_idx = findChildIndexByPrefix(inner, prefix, prefix_len);
-        if (child_idx >= inner->header.num_items) {
-            /* Prefix is beyond all children - check if last child might have it */
+        int child_idx = findChildIndexByScore(inner, score, validated_len);
+        if (child_idx >= inner->header.num_items)
             child_idx = inner->header.num_items - 1;
-        }
+        validated_len = inner->prefix_len;
         current = inner->children[child_idx];
     }
 
     leafNode *leaf = (leafNode *)current;
-    int pos = leafNodeBinarySearchByPrefix(leaf, prefix, prefix_len);
+    int pos = leafNodeBinarySearchByScore(leaf, score);
 
     /* Check if we found a match */
-    if (pos < leaf->header.num_items && prefixCmp(leaf->values[pos], prefix, prefix_len) == 0) {
+    if (pos < leaf->header.num_items && memcmp(leaf->values[pos], score, SCORE_SIZE) == 0) {
         it->fbt = fbt;
         it->current_leaf = leaf;
         it->leaf_count = leaf->header.num_items;
