@@ -31,10 +31,10 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
 const_static_string fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
 long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item);
 
-/* Prefix lookup - finds first element where first prefix_len bytes match or exceed prefix.
+/* Score lookup - finds first element where 8-byte score prefix matches.
  * Returns true if found, with iterator positioned at that element.
  * Returns false if no such element exists. */
-bool fbtreeLookupByPrefix(fbtreeIndex *fbt, const char *prefix, size_t prefix_len, fbtreeIterator *iterator);
+bool fbtreeLookupByScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator);
 
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
