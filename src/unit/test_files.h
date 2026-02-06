@@ -323,16 +323,6 @@ int test_sha1(int argc, char **argv, int flags);
 int test_sha256_abc(int argc, char **argv, int flags);
 int test_sha256_large(int argc, char **argv, int flags);
 int test_sha256_million_a(int argc, char **argv, int flags);
-int test_static_string_create_and_free(int argc, char **argv, int flags);
-int test_static_string_empty(int argc, char **argv, int flags);
-int test_static_string_type8(int argc, char **argv, int flags);
-int test_static_string_type16(int argc, char **argv, int flags);
-int test_static_string_type32(int argc, char **argv, int flags);
-int test_static_string_dup(int argc, char **argv, int flags);
-int test_static_string_cmp(int argc, char **argv, int flags);
-int test_static_string_binary_safe(int argc, char **argv, int flags);
-int test_static_string_alloc_ptr(int argc, char **argv, int flags);
-int test_static_string_header_sizes(int argc, char **argv, int flags);
 int test_string2ll(int argc, char **argv, int flags);
 int test_string2l(int argc, char **argv, int flags);
 int test_ll2string(int argc, char **argv, int flags);
@@ -415,7 +405,6 @@ unitTest __test_rax_c[] = {{"test_raxRandomWalk", test_raxRandomWalk}, {"test_ra
 unitTest __test_sds_c[] = {{"test_sds", test_sds}, {"test_typesAndAllocSize", test_typesAndAllocSize}, {"test_sdsHeaderSizes", test_sdsHeaderSizes}, {"test_sdssplitargs", test_sdssplitargs}, {"test_sdsnsplitargs", test_sdsnsplitargs}, {"test_sdsnsplitargsBenchmark", test_sdsnsplitargsBenchmark}, {NULL, NULL}};
 unitTest __test_sha1_c[] = {{"test_sha1", test_sha1}, {NULL, NULL}};
 unitTest __test_sha256_c[] = {{"test_sha256_abc", test_sha256_abc}, {"test_sha256_large", test_sha256_large}, {"test_sha256_million_a", test_sha256_million_a}, {NULL, NULL}};
-unitTest __test_static_string_c[] = {{"test_static_string_create_and_free", test_static_string_create_and_free}, {"test_static_string_empty", test_static_string_empty}, {"test_static_string_type8", test_static_string_type8}, {"test_static_string_type16", test_static_string_type16}, {"test_static_string_type32", test_static_string_type32}, {"test_static_string_dup", test_static_string_dup}, {"test_static_string_cmp", test_static_string_cmp}, {"test_static_string_binary_safe", test_static_string_binary_safe}, {"test_static_string_alloc_ptr", test_static_string_alloc_ptr}, {"test_static_string_header_sizes", test_static_string_header_sizes}, {NULL, NULL}};
 unitTest __test_util_c[] = {{"test_string2ll", test_string2ll}, {"test_string2l", test_string2l}, {"test_ll2string", test_ll2string}, {"test_ld2string", test_ld2string}, {"test_fixedpoint_d2string", test_fixedpoint_d2string}, {"test_version2num", test_version2num}, {"test_reclaimFilePageCache", test_reclaimFilePageCache}, {"test_writePointerWithPadding", test_writePointerWithPadding}, {NULL, NULL}};
 unitTest __test_valkey_strtod_c[] = {{"test_valkey_strtod", test_valkey_strtod}, {NULL, NULL}};
 unitTest __test_vector_c[] = {{"test_vector", test_vector}, {NULL, NULL}};
@@ -450,7 +439,6 @@ struct unitTestSuite {
     {"test_sds.c", __test_sds_c},
     {"test_sha1.c", __test_sha1_c},
     {"test_sha256.c", __test_sha256_c},
-    {"test_static_string.c", __test_static_string_c},
     {"test_util.c", __test_util_c},
     {"test_valkey_strtod.c", __test_valkey_strtod_c},
     {"test_vector.c", __test_vector_c},
