@@ -4,7 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "static_string.h"
+/* Forward declare sds types to avoid C++ issues with sds.h macros.
+ * C code will have sds.h included elsewhere; C++ benchmarks get the typedef here. */
+typedef char *sds;
+typedef const char *const_sds;
 
 /* For zset entries, the string contains: [8-byte normalized score][element bytes]
  * The normalized score is stored in big-endian for lexicographic ordering.
@@ -18,18 +21,18 @@ typedef uint64_t fbtreeIterator[3];
 
 /* Internal API for testing */
 fbtreeIndex *fbtreeCreate(void);
-static_string fbtreeInsert(fbtreeIndex *fbt, static_string string);
-bool fbtreeDelete(fbtreeIndex *fbt, const_static_string key);
+sds fbtreeInsert(fbtreeIndex *fbt, sds string);
+bool fbtreeDelete(fbtreeIndex *fbt, const_sds key);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
 void fbtreeResetIterator(fbtreeIterator *iterator);
-bool fbtreeNext(fbtreeIterator *iterator, const_static_string *pos);
-bool fbtreePrev(fbtreeIterator *iterator, const_static_string *pos);
+bool fbtreeNext(fbtreeIterator *iterator, const_sds *pos);
+bool fbtreePrev(fbtreeIterator *iterator, const_sds *pos);
 
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
-const_static_string fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
-long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_static_string item);
+const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
+long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item);
 
 /* Score lookup - finds first element where 8-byte score prefix matches.
  * Returns true if found, with iterator positioned at that element.

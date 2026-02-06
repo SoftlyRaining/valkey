@@ -502,7 +502,7 @@ ENGINE_SERVER_OBJ = \
     eval.o \
     evict.o \
     expire.o \
-	fbtree_ordered_index.o \
+    fbtree_ordered_index.o \
     fifo.o \
     functions.o \
     geo.o \
@@ -560,7 +560,6 @@ ENGINE_SERVER_OBJ = \
     socket.o \
     sort.o \
     sparkline.o \
-	static_string.o \
     strl.o \
     syncio.o \
     syscheck.o \
