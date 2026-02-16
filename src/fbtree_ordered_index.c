@@ -812,7 +812,7 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     return result.inserted_item;
 }
 
-static deleteResult leafNodeDelete(leafNode *leaf, const_sds item) {
+static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds item) {
     assert(leaf->header.num_items > 0);
 
     /* Find item by pointer comparison */
@@ -824,6 +824,13 @@ static deleteResult leafNodeDelete(leafNode *leaf, const_sds item) {
         }
     }
     if (delete_index < 0) return (deleteResult){0};
+
+    /* Update leaf caches before delete if this leaf will become empty.
+     * Done here while leaf is hot in cache to avoid extra fetches. */
+    if (leaf->header.num_items == 1) {
+        if (leaf == fbt->leftmost_leaf) fbt->leftmost_leaf = leaf->next;
+        if (leaf == fbt->rightmost_leaf) fbt->rightmost_leaf = leaf->prev;
+    }
 
     sdsfree(leaf->values[delete_index]);
     leaf->header.num_items--;
@@ -839,15 +846,15 @@ static deleteResult leafNodeDelete(leafNode *leaf, const_sds item) {
     return result;
 }
 
-static deleteResult subtreeDelete(node *n, const_sds item) {
+static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
     if (n->is_leaf)
-        return leafNodeDelete((leafNode *)n, item);
+        return leafNodeDelete(fbt, (leafNode *)n, item);
 
     innerNode *inner = (innerNode *)n;
     int index = findChildIndex(inner, item, 0);
     if (index == inner->header.num_items) return (deleteResult){0};
 
-    deleteResult child_result = subtreeDelete(inner->children[index], item);
+    deleteResult child_result = subtreeDelete(fbt, inner->children[index], item);
     if (!child_result.delete_executed) return child_result;
 
     /* Update child size after delete */
@@ -887,18 +894,7 @@ static deleteResult subtreeDelete(node *n, const_sds item) {
 bool fbtreeDelete(fbtreeIndex *fbt, const_sds item) {
     if (fbt->root == NULL) return false;
 
-    /* Update leaf caches before delete - they may point to a leaf that gets freed */
-    // TODO: optimize to avoid fetches - only on leaf node delete: compare pointers and update if needed
-    if (fbt->leftmost_leaf && fbt->leftmost_leaf->header.num_items == 1 &&
-        fbt->leftmost_leaf->values[0] == item) {
-        fbt->leftmost_leaf = fbt->leftmost_leaf->next;
-    }
-    if (fbt->rightmost_leaf && fbt->rightmost_leaf->header.num_items == 1 &&
-        fbt->rightmost_leaf->values[0] == item) {
-        fbt->rightmost_leaf = fbt->rightmost_leaf->prev;
-    }
-
-    deleteResult result = subtreeDelete(fbt->root, item);
+    deleteResult result = subtreeDelete(fbt, fbt->root, item);
     if (!result.delete_executed) return false;
 
     if (getSubtreeSize(fbt->root) == 0) {
