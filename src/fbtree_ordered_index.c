@@ -23,6 +23,7 @@
 #endif
 
 #define NODE_SIZE 61
+#define MIN_FILL (NODE_SIZE / 4) /* Minimum items before node underflows */
 #define FEATURE_SIZE 4
 #define EMBED_PREFIX_LEN 46
 #define FEATURE_ROW_SIZE 64 /* size of cache line */
@@ -95,9 +96,9 @@ typedef enum {
 } InsertHint;
 
 typedef struct {
-    sds updated_anchor;   /* Pointer to updated anchor string if it's changed */
-    bool delete_executed; /* True if key was found and deleted, False if not found no-op */
-    // TODO: implement merging: bool node_underflowed; /* True if root of subtree has underflowed and should be merged with a sibling */
+    sds updated_anchor;    /* Pointer to updated anchor string if it's changed */
+    bool delete_executed;  /* True if key was found and deleted, False if not found no-op */
+    bool node_underflowed; /* TODO: Currently unused. Implement node merging for memory efficiency if needed. */
 } deleteResult;
 
 /* Conversion from user-facing opaque iterator type to internal struct */
@@ -254,6 +255,23 @@ static bool innerNodeInsert(innerNode *parent, const node *child, sds child_anch
     return anchor_changed;
 }
 
+/* Remove child at given index from inner node. Caller must free the child. */
+static void innerNodeRemoveChild(innerNode *parent, int index) {
+    assert(index < parent->header.num_items);
+    int num_to_move = parent->header.num_items - index - 1;
+    if (num_to_move > 0) {
+        for (int j = 0; j < FEATURE_SIZE; j++)
+            memmove(&parent->features[j][index], &parent->features[j][index + 1], num_to_move);
+        memmove(&parent->anchors[index], &parent->anchors[index + 1], num_to_move * sizeof(parent->anchors[0]));
+        memmove(&parent->children[index], &parent->children[index + 1], num_to_move * sizeof(parent->children[0]));
+        memmove(&parent->child_sizes[index], &parent->child_sizes[index + 1], num_to_move * sizeof(parent->child_sizes[0]));
+    }
+    parent->header.num_items--;
+    if (index == 0 || index == parent->header.num_items) {
+        updateCommonPrefix(parent);
+    }
+}
+
 static innerNode *innerNodeSplit(innerNode *left_node) {
     assert(left_node->header.num_items == NODE_SIZE);
     innerNode *right_node = innerNodeCreate();
@@ -319,6 +337,12 @@ static void linkLeafRight(leafNode *left, leafNode *right) {
     right->next = left->next;
     left->next = right;
     if (right->next) right->next->prev = right;
+}
+
+/* Unlink a leaf from the doubly-linked list */
+static void unlinkLeaf(leafNode *leaf) {
+    if (leaf->prev) leaf->prev->next = leaf->next;
+    if (leaf->next) leaf->next->prev = leaf->prev;
 }
 
 static insertResult leafNodeSplit(leafNode *left_leaf, sds string) {
@@ -726,7 +750,8 @@ static deleteResult leafNodeDelete(leafNode *leaf, const_sds item) {
 
     deleteResult result = {
         .delete_executed = true,
-        .updated_anchor = (delete_index == leaf->header.num_items) ? leafNodeHighKey(leaf) : NULL};
+        .updated_anchor = (delete_index == leaf->header.num_items) ? leafNodeHighKey(leaf) : NULL,
+        .node_underflowed = leaf->header.num_items < MIN_FILL};
     return result;
 }
 
@@ -750,12 +775,26 @@ static deleteResult subtreeDelete(node *n, const_sds item) {
             inner->features[j][index] = getFeatureByte(child_result.updated_anchor, inner->prefix_len, j);
     }
 
-    // TODO: check if we need to update prefix and features
-    // TODO: handle underflow/merging
+    /* Remove empty child */
+    if (inner->child_sizes[index] == 0) {
+        node *empty_child = inner->children[index];
+        if (empty_child->is_leaf) unlinkLeaf((leafNode *)empty_child);
+        zfree(empty_child);
+        innerNodeRemoveChild(inner, index);
+        /* Anchor update: if we removed last child, new last child's anchor bubbles up */
+        sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
+                             ? inner->anchors[inner->header.num_items - 1]
+                             : NULL;
+        return (deleteResult){
+            .updated_anchor = new_anchor,
+            .delete_executed = true,
+            .node_underflowed = inner->header.num_items < MIN_FILL};
+    }
 
     deleteResult result = {
         .updated_anchor = index == inner->header.num_items - 1 ? child_result.updated_anchor : NULL,
-        .delete_executed = true};
+        .delete_executed = true,
+        .node_underflowed = inner->header.num_items < MIN_FILL};
     return result;
 }
 
@@ -764,12 +803,32 @@ static deleteResult subtreeDelete(node *n, const_sds item) {
 bool fbtreeDelete(fbtreeIndex *fbt, const_sds item) {
     if (fbt->root == NULL) return false;
 
+    /* Update leaf caches before delete - they may point to a leaf that gets freed */
+    // TODO: optimize to avoid fetches - only on leaf node delete: compare pointers and update if needed
+    if (fbt->leftmost_leaf && fbt->leftmost_leaf->header.num_items == 1 &&
+        fbt->leftmost_leaf->values[0] == item) {
+        fbt->leftmost_leaf = fbt->leftmost_leaf->next;
+    }
+    if (fbt->rightmost_leaf && fbt->rightmost_leaf->header.num_items == 1 &&
+        fbt->rightmost_leaf->values[0] == item) {
+        fbt->rightmost_leaf = fbt->rightmost_leaf->prev;
+    }
+
     deleteResult result = subtreeDelete(fbt->root, item);
-    if (result.delete_executed && getSubtreeSize(fbt->root) == 0) {
+    if (!result.delete_executed) return false;
+
+    if (getSubtreeSize(fbt->root) == 0) {
         zfree(fbt->root);
         fbt->root = NULL;
+        fbt->leftmost_leaf = NULL;
+        fbt->rightmost_leaf = NULL;
+    } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
+        /* Root collapse: inner root with single child becomes that child */
+        innerNode *old_root = (innerNode *)fbt->root;
+        fbt->root = old_root->children[0];
+        zfree(old_root);
     }
-    return result.delete_executed;
+    return true;
 }
 
 /* Get element at given rank (0-indexed). Returns NULL if rank >= length */
@@ -1035,6 +1094,8 @@ bool fbtreeLookupByScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *it
 typedef struct {
     bool valid;
     uint32_t size;
+    leafNode *leftmost_leaf;
+    leafNode *rightmost_leaf;
 } validateResult;
 
 static void printBinaryString(const_sds s) {
@@ -1075,12 +1136,14 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
         }
         if (count > 0 && count % 8 != 0) printf("\n");
     }
-    return (validateResult){.valid = valid, .size = count};
+    return (validateResult){.valid = valid, .size = count, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
 }
 
 static validateResult validateInner(innerNode *inner, int depth, size_t parent_prefix_len, bool verbose) {
     bool valid = inner->prefix_len >= parent_prefix_len;
     uint32_t total_size = 0;
+    leafNode *leftmost = NULL;
+    leafNode *rightmost = NULL;
 
     if (verbose) {
         printf(" Inner (prefix=%zu, keys=%d)\n", inner->prefix_len, inner->header.num_items);
@@ -1114,6 +1177,10 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
 
         validateResult child_result = validateNode(child, depth + 1, inner->prefix_len, verbose);
 
+        /* Track leftmost/rightmost leaves */
+        if (i == 0) leftmost = child_result.leftmost_leaf;
+        rightmost = child_result.rightmost_leaf;
+
         /* Validate stored size matches actual size */
         bool size_ok = (inner->child_sizes[i] == child_result.size);
 
@@ -1130,7 +1197,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
             printf("FAIL\033[0m\n");
         }
     }
-    return (validateResult){.valid = valid, .size = total_size};
+    return (validateResult){.valid = valid, .size = total_size, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
 }
 
 static validateResult validateNode(node *n, int depth, size_t parent_prefix_len, bool verbose) {
@@ -1146,7 +1213,14 @@ static validateResult validateNode(node *n, int depth, size_t parent_prefix_len,
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
     unsigned long length = fbt->root ? getSubtreeSize(fbt->root) : 0;
     if (verbose) printf("FBTree (length=%lu)\n", length);
-    if (!fbt->root) return true;
+    if (!fbt->root) {
+        /* Empty tree: caches must be NULL */
+        if (fbt->leftmost_leaf || fbt->rightmost_leaf) {
+            if (verbose) printf("\033[31mERROR: empty tree has non-NULL leaf cache\033[0m\n");
+            return false;
+        }
+        return true;
+    }
 
     validateResult result = validateNode(fbt->root, 0, 0, verbose);
 
@@ -1156,7 +1230,17 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
         printf("\033[31mERROR: tree size %u != computed length %lu\033[0m\n", result.size, length);
     }
 
-    return result.valid && length_ok;
+    /* Verify leaf caches point to actual leftmost/rightmost leaves */
+    leafNode *actual_leftmost = result.leftmost_leaf;
+    leafNode *actual_rightmost = result.rightmost_leaf;
+    bool caches_ok = (fbt->leftmost_leaf == actual_leftmost && fbt->rightmost_leaf == actual_rightmost);
+    if (!caches_ok && verbose) {
+        printf("\033[31mERROR: leaf cache mismatch (leftmost: %p vs %p, rightmost: %p vs %p)\033[0m\n",
+               (void *)fbt->leftmost_leaf, (void *)actual_leftmost,
+               (void *)fbt->rightmost_leaf, (void *)actual_rightmost);
+    }
+
+    return result.valid && length_ok && caches_ok;
 }
 
 /* Wrapper functions for OrderedIndexOps interface */

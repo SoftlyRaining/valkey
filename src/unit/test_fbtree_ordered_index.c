@@ -1590,6 +1590,14 @@ int test_fbtree_delete_all_items(int argc, char **argv, int flags) {
     TEST_ASSERT(fbtreeLength(fbt) == 0);
     TEST_ASSERT(is_tree_valid(fbt));
 
+    /* Verify leaf caches cleared - iterators return false on empty tree */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    fbtreeInitIterator(&it, fbt);
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
@@ -1667,6 +1675,151 @@ int test_fbtree_delete_max_updates_anchor(int argc, char **argv, int flags) {
     while (fbtreePrev(&it, &pos)) count++;
     TEST_ASSERT(count == 199);
 
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_delete_all_multilevel(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Create multi-level tree */
+    char buf[16];
+    const int count = TEST_NODE_CAPACITY * 3;
+    sds *inserted = zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    /* Delete all items - exercises empty node removal */
+    for (int i = 0; i < count; i++) {
+        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+        TEST_ASSERT(is_tree_valid(fbt));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+
+    zfree(inserted);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_delete_root_collapse(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Create 2-level tree: root inner node with 2 leaf children */
+    char buf[16];
+    const int overflow = 10;
+    const int count = TEST_NODE_CAPACITY + overflow;
+    sds *inserted = zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    /* Delete items from first leaf until it's empty - triggers root collapse */
+    for (int i = 0; i < TEST_NODE_CAPACITY; i++) {
+        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+    TEST_ASSERT(fbtreeLength(fbt) == (size_t)overflow);
+
+    /* Tree should still work after collapse */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    int remaining = 0;
+    while (fbtreeNext(&it, &pos)) remaining++;
+    TEST_ASSERT(remaining == overflow);
+
+    zfree(inserted);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_delete_leftmost_leaf_updates_cache(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Create multi-level tree */
+    char buf[16];
+    const int count = TEST_NODE_CAPACITY * 3;
+    sds *inserted = zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+
+    /* Delete all items from the first leaf */
+    for (int i = 0; i < TEST_NODE_CAPACITY; i++) {
+        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    /* Forward iteration should still work - leftmost_leaf must be valid */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    /* First remaining item should be key_061 */
+    snprintf(buf, sizeof(buf), "key_%03d", TEST_NODE_CAPACITY);
+    TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+
+    zfree(inserted);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_delete_rightmost_leaf_updates_cache(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Create multi-level tree */
+    char buf[16];
+    const int count = TEST_NODE_CAPACITY * 3;
+    sds *inserted = zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+
+    /* Delete all items from the last leaf (items from end backwards) */
+    for (int i = count - 1; i >= count - TEST_NODE_CAPACITY; i--) {
+        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    /* Backward iteration should still work - rightmost_leaf must be valid */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    /* Last remaining item */
+    snprintf(buf, sizeof(buf), "key_%03d", count - TEST_NODE_CAPACITY - 1);
+    TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+
+    zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
