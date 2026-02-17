@@ -398,6 +398,42 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string) {
         .inserted_item = leaf_result.inserted_item};
 }
 
+/* Scalar implementation - always available for testing */
+static void featureSearchSIMD_scalar(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                                     int num_keys,
+                                     const unsigned char target[FEATURE_SIZE],
+                                     int *out_left,
+                                     int *out_right) {
+    int left = 0, right = num_keys;
+
+    for (int i = 0; i < num_keys; i++) {
+        int cmp = 0;
+        for (int row = 0; row < FEATURE_SIZE && cmp == 0; row++) {
+            signed char target_biased = (signed char)(target[row] ^ FEATURE_BIAS);
+            cmp = target_biased - (signed char)features[row][i];
+        }
+        if (cmp <= 0) {
+            left = i;
+            break;
+        }
+        left = i + 1;
+    }
+
+    right = left;
+    for (int i = left; i < num_keys; i++) {
+        int cmp = 0;
+        for (int row = 0; row < FEATURE_SIZE && cmp == 0; row++) {
+            signed char target_biased = (signed char)(target[row] ^ FEATURE_BIAS);
+            cmp = target_biased - (signed char)features[row][i];
+        }
+        if (cmp < 0) break;
+        right = i + 1;
+    }
+
+    *out_left = left;
+    *out_right = right;
+}
+
 /* SIMD feature search: finds range [out_left, out_right) of keys matching target.
  * Features are stored pre-biased (XOR'd with 0x80), so we only bias the target.
  * Bitmasks track candidates (ge_mask: target >= key, le_mask: target <= key). */
@@ -413,14 +449,14 @@ static void featureSearchSIMD_avx2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE]
     uint64_t ge_mask = valid_mask;
     uint64_t le_mask = valid_mask;
 
-    for (int j = 0; j < FEATURE_SIZE && (ge_mask || le_mask); j++) {
+    for (int row = 0; row < FEATURE_SIZE && (ge_mask || le_mask); row++) {
         /* Bias target to match pre-biased features */
-        __m256i target_biased = _mm256_set1_epi8((char)(target[j] ^ FEATURE_BIAS));
+        __m256i target_biased = _mm256_set1_epi8((char)(target[row] ^ FEATURE_BIAS));
         uint64_t gt_this = 0, lt_this = 0;
 
         /* Process 64 feature bytes in 2x32-byte chunks */
         for (int chunk = 0; chunk < 2; chunk++) {
-            __m256i feat = _mm256_loadu_si256((const __m256i *)&features[j][chunk * 32]);
+            __m256i feat = _mm256_loadu_si256((const __m256i *)&features[row][chunk * 32]);
             __m256i gt = _mm256_cmpgt_epi8(target_biased, feat);
             __m256i lt = _mm256_cmpgt_epi8(feat, target_biased);
             gt_this |= (uint64_t)(uint32_t)_mm256_movemask_epi8(gt) << (chunk * 32);
@@ -447,14 +483,14 @@ static void featureSearchSIMD_sse2(char features[FEATURE_SIZE][FEATURE_ROW_SIZE]
     uint64_t ge_mask = valid_mask;
     uint64_t le_mask = valid_mask;
 
-    for (int j = 0; j < FEATURE_SIZE && (ge_mask || le_mask); j++) {
+    for (int row = 0; row < FEATURE_SIZE && (ge_mask || le_mask); row++) {
         /* Bias target to match pre-biased features */
-        __m128i target_biased = _mm_set1_epi8((char)(target[j] ^ FEATURE_BIAS));
+        __m128i target_biased = _mm_set1_epi8((char)(target[row] ^ FEATURE_BIAS));
         uint64_t gt_this = 0, lt_this = 0;
 
         /* Process 64 feature bytes in 4x16-byte chunks */
         for (int chunk = 0; chunk < 4; chunk++) {
-            __m128i feat = _mm_loadu_si128((const __m128i *)&features[j][chunk * 16]);
+            __m128i feat = _mm_loadu_si128((const __m128i *)&features[row][chunk * 16]);
             __m128i gt = _mm_cmpgt_epi8(target_biased, feat);
             __m128i lt = _mm_cmplt_epi8(target_biased, feat);
             gt_this |= (uint64_t)(uint16_t)_mm_movemask_epi8(gt) << (chunk * 16);
@@ -483,45 +519,85 @@ static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
 }
 
 #elif HAVE_ARM_NEON
-#error "TODO: Implement ARM NEON version of featureSearchSIMD"
 
-#else
-/* Scalar fallback - features are stored pre-biased, so bias target for comparison */
+/* Convert 16-byte NEON comparison result to 16-bit mask (one bit per byte). */
+static uint16_t neon_movemask_16(uint8x16_t v) {
+    /* Position bits: byte i contributes to bit i of result */
+    static const uint8x16_t shift_amt = {0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7};
+    uint8x16_t masked = vshrq_n_u8(v, 7); /* isolate high bit: 0x01 or 0x00 */
+    uint8x16_t shifted = vshlq_u8(masked, vreinterpretq_s8_u8(shift_amt));
+    /* Sum each half to get one byte with 8 bits packed */
+    uint8_t lo = vaddv_u8(vget_low_u8(shifted));
+    uint8_t hi = vaddv_u8(vget_high_u8(shifted));
+    return (uint16_t)lo | ((uint16_t)hi << 8);
+}
+
+/* Convert 4x16-byte NEON vectors to 64-bit mask (one bit per byte). */
+static uint64_t neon_movemask_64(uint8x16_t v0, uint8x16_t v1, uint8x16_t v2, uint8x16_t v3) {
+    return (uint64_t)neon_movemask_16(v0) |
+           ((uint64_t)neon_movemask_16(v1) << 16) |
+           ((uint64_t)neon_movemask_16(v2) << 32) |
+           ((uint64_t)neon_movemask_16(v3) << 48);
+}
+
 static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
                               int num_keys,
                               const unsigned char target[FEATURE_SIZE],
                               int *out_left,
                               int *out_right) {
-    int left = 0, right = num_keys;
+    /* Index vector for validity mask generation */
+    static const uint8x16_t neon_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 
-    /* Find leftmost position where target <= feature (lower bound) */
-    for (int i = 0; i < num_keys; i++) {
-        int cmp = 0;
-        for (int j = 0; j < FEATURE_SIZE && cmp == 0; j++) {
-            signed char target_biased = (signed char)(target[j] ^ FEATURE_BIAS);
-            cmp = target_biased - (signed char)features[j][i];
-        }
-        if (cmp <= 0) {
-            left = i;
-            break;
-        }
-        left = i + 1;
+    /* ge[chunk] tracks positions where target >= feature (not yet proven less)
+     * le[chunk] tracks positions where target <= feature (not yet proven greater)
+     * Initialize both with validity mask (0xFF = valid, 0x00 = invalid) */
+    uint8x16_t ge[4], le[4];
+    int full_chunks = num_keys / 16;
+    for (int chunk = 0; chunk < full_chunks; chunk++)
+        ge[chunk] = le[chunk] = vdupq_n_u8(0xFF);
+    for (int chunk = full_chunks; chunk < 4; chunk++) {
+        int remaining = num_keys - chunk * 16;
+        if (remaining <= 0)
+            ge[chunk] = le[chunk] = vdupq_n_u8(0x00);
+        else
+            ge[chunk] = le[chunk] = vcltq_u8(neon_indices, vdupq_n_u8((uint8_t)remaining));
     }
 
-    /* Find rightmost position where target >= feature (upper bound) */
-    right = left;
-    for (int i = left; i < num_keys; i++) {
-        int cmp = 0;
-        for (int j = 0; j < FEATURE_SIZE && cmp == 0; j++) {
-            signed char target_biased = (signed char)(target[j] ^ FEATURE_BIAS);
-            cmp = target_biased - (signed char)features[j][i];
+    for (int row = 0; row < FEATURE_SIZE; row++) {
+        int8x16_t target_biased = vdupq_n_s8((int8_t)(target[row] ^ FEATURE_BIAS));
+
+        for (int chunk = 0; chunk < 4; chunk++) {
+            int8x16_t feat = vld1q_s8((const int8_t *)&features[row][chunk * 16]);
+            uint8x16_t gt = vcgtq_s8(target_biased, feat); /* target > feature */
+            uint8x16_t lt = vcltq_s8(target_biased, feat); /* target < feature */
+
+            /* undecided = positions where both ge and le are still set */
+            uint8x16_t undecided = vandq_u8(ge[chunk], le[chunk]);
+
+            /* ge &= ~(lt & undecided): if target < feature and was undecided, target is not >= */
+            ge[chunk] = vbicq_u8(ge[chunk], vandq_u8(lt, undecided));
+
+            /* le &= ~(gt & undecided): if target > feature and was undecided, target is not <= */
+            le[chunk] = vbicq_u8(le[chunk], vandq_u8(gt, undecided));
         }
-        if (cmp < 0) break;
-        right = i + 1;
     }
 
-    *out_left = left;
-    *out_right = right;
+    /* Extract final bitmasks */
+    uint64_t le_mask = neon_movemask_64(le[0], le[1], le[2], le[3]);
+    uint64_t ge_mask = neon_movemask_64(ge[0], ge[1], ge[2], ge[3]);
+
+    *out_left = le_mask ? __builtin_ctzll(le_mask) : num_keys;
+    *out_right = (le_mask & ~ge_mask) ? __builtin_ctzll(le_mask & ~ge_mask) : num_keys;
+}
+
+#else
+
+static void featureSearchSIMD(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                              int num_keys,
+                              const unsigned char target[FEATURE_SIZE],
+                              int *out_left,
+                              int *out_right) {
+    featureSearchSIMD_scalar(features, num_keys, target, out_left, out_right);
 }
 #endif /* HAVE_X86_SIMD */
 
@@ -551,6 +627,14 @@ void featureSearchSIMD_sse2_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW
     featureSearchSIMD_sse2(features, num_keys, target, out_left, out_right);
 }
 #endif
+
+void featureSearchSIMD_scalar_test_wrapper(char features[FEATURE_SIZE][FEATURE_ROW_SIZE],
+                                           int num_keys,
+                                           const unsigned char target[FEATURE_SIZE],
+                                           int *out_left,
+                                           int *out_right) {
+    featureSearchSIMD_scalar(features, num_keys, target, out_left, out_right);
+}
 
 /* Find child index for insertion using feature vectors and anchors.
  * Two-pass approach:
