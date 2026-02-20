@@ -2049,143 +2049,235 @@ int test_fbtree_rank_deep_tree(int argc, char **argv, int flags) {
     return 0;
 }
 
-/* ========== Score Lookup Tests ========== */
+/* ========== fbtreeSeekToScore Tests ========== 
+ * These tests use string literals where the first 8 bytes are the "score" prefix.
+ * Lexicographic ordering: "AAAAAAAA" < "BBBBBBBB" < "CCCCCCCC" */
 
-int test_fbtree_score_lookup_basic(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
+int test_fbtree_seek_to_score_exact(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
 
-    /* Simulate zset keys: 8-byte score prefix + element */
-    char key[24];
-    for (int i = 0; i < 100; i++) {
-        uint64_t score = (uint64_t)i * 1000;
-        memcpy(key, &score, 8);
-        snprintf(key + 8, 16, "element_%03d", i);
-        sds str = sdsnewlen(key, 8 + strlen(key + 8) + 1);
-        fbtreeInsert(fbt, str);
-    }
+    /* Insert 3 items with distinct 8-byte prefixes */
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
     fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+
     const_sds pos;
-
-    /* Lookup by 8-byte score */
-    uint64_t search_score = 50 * 1000;
-    TEST_ASSERT(fbtreeLookupByScore(fbt, (const char *)&search_score, &it));
     TEST_ASSERT(fbtreeNext(&it, &pos));
-    uint64_t found_score;
-    memcpy(&found_score, pos, 8);
-    TEST_ASSERT(found_score == search_score);
-
-    /* Non-existent score */
-    search_score = 999999;
-    TEST_ASSERT(!fbtreeLookupByScore(fbt, (const char *)&search_score, &it));
+    TEST_ASSERT(memcmp(pos, "BBBBBBBB", 8) == 0);
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
-int test_fbtree_score_lookup_empty_tree(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
+int test_fbtree_seek_to_score_between(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Insert items with prefixes "AAAA" and "CCCC" (no "BBBB") */
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_1"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it); /* Between AAAA and CCCC */
+
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "CCCCCCCC", 8) == 0); /* Should position at first >= "BBBB" */
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_seek_to_score_past_end(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("AAAAAAAAelem"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it); /* Past all elements */
+
+    const_sds pos;
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_seek_to_score_past_end_then_prev(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it); /* Past all elements (+inf) */
+
+    /* Backward should work - iterate from end */
+    const_sds pos;
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "CCCCCCCC", 8) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "BBBBBBBB", 8) == 0);
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "AAAAAAAA", 8) == 0);
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    /* Verify forward from past-end invalidates iterator */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
+    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Fails and invalidates */
+    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Now invalid */
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_seek_to_score_before_start_then_next(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("MMMMMMMMelem_0"));
+    fbtreeInsert(fbt, createString("NNNNNNNNelem_1"));
+    fbtreeInsert(fbt, createString("OOOOOOOOelem_2"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it); /* Before all elements (-inf) */
+
+    /* Forward should work - iterate from start */
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "MMMMMMMM", 8) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "NNNNNNNN", 8) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "OOOOOOOO", 8) == 0);
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    /* Verify backward from before-start invalidates iterator */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Fails and invalidates */
+    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Now invalid */
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_seek_to_score_before_start(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("MMMMMMMMelem"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it); /* Before all elements */
+
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "MMMMMMMM", 8) == 0);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_seek_to_score_empty(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
 
     fbtreeIterator it;
-    uint64_t score = 12345;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
 
-    /* Lookup in empty tree returns false */
-    TEST_ASSERT(!fbtreeLookupByScore(fbt, (const char *)&score, &it));
+    const_sds pos;
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
-int test_fbtree_score_lookup_multilevel(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
+int test_fbtree_seek_to_score_deep_tree(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
 
-    /* Multi-level tree with 8-byte score keys */
-    char key[24];
-    for (int i = 0; i < 500; i++) {
-        uint64_t score = (uint64_t)i * 100;
-        memcpy(key, &score, 8);
-        snprintf(key + 8, 16, "elem_%04d", i);
-        sds str = sdsnewlen(key, 8 + strlen(key + 8) + 1);
-        fbtreeInsert(fbt, str);
+    const int count = TEST_THREE_LEVEL_ITEMS;
+    char buf[24];
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "%08d_elem_%05d", i, i);
+        fbtreeInsert(fbt, createString(buf));
     }
     TEST_ASSERT(is_tree_valid(fbt));
 
     fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Find score at various positions */
-    uint64_t search_score = 50 * 100;
-    TEST_ASSERT(fbtreeLookupByScore(fbt, (const char *)&search_score, &it));
+    /* Seek to middle of deep tree */
+    snprintf(buf, sizeof(buf), "%08d", count / 2);
+    fbtreeSeekToScore(fbt, buf, &it);
     TEST_ASSERT(fbtreeNext(&it, &pos));
-    uint64_t found;
-    memcpy(&found, pos, 8);
-    TEST_ASSERT(found == search_score);
+    TEST_ASSERT(memcmp(pos, buf, 8) == 0);
 
-    search_score = 250 * 100;
-    TEST_ASSERT(fbtreeLookupByScore(fbt, (const char *)&search_score, &it));
+    /* Seek near end */
+    snprintf(buf, sizeof(buf), "%08d", count - 10);
+    fbtreeSeekToScore(fbt, buf, &it);
     TEST_ASSERT(fbtreeNext(&it, &pos));
-    memcpy(&found, pos, 8);
-    TEST_ASSERT(found == search_score);
+    TEST_ASSERT(memcmp(pos, buf, 8) == 0);
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
-int test_fbtree_score_lookup_iterate(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
+int test_fbtree_seek_to_score_iterate(int argc, char **argv, int flags) {
+    UNUSED(argc); UNUSED(argv); UNUSED(flags);
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
 
-    /* Insert multiple items with same score */
-    char key[24];
-    uint64_t score = 1000;
-    for (int i = 0; i < 5; i++) {
-        memcpy(key, &score, 8);
-        snprintf(key + 8, 16, "elem_%d", i);
-        sds str = sdsnewlen(key, 8 + strlen(key + 8) + 1);
-        fbtreeInsert(fbt, str);
-    }
-    /* Add items with different scores */
-    score = 500;
-    memcpy(key, &score, 8);
-    snprintf(key + 8, 16, "before");
-    fbtreeInsert(fbt, sdsnewlen(key, 8 + strlen(key + 8) + 1));
-
-    score = 2000;
-    memcpy(key, &score, 8);
-    snprintf(key + 8, 16, "after");
-    fbtreeInsert(fbt, sdsnewlen(key, 8 + strlen(key + 8) + 1));
+    /* Insert 5 items with same score prefix, different elements */
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_2"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_3"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_4"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_0"));
 
     fbtreeIterator it;
-    const_sds pos;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
 
-    /* Find first item with score 1000 and iterate */
-    score = 1000;
-    TEST_ASSERT(fbtreeLookupByScore(fbt, (const char *)&score, &it));
-    
-    /* Should get all 5 items with score 1000 */
+    /* Count items with matching score prefix */
+    const_sds pos;
     int count = 0;
-    uint64_t found;
-    while (fbtreeNext(&it, &pos)) {
-        memcpy(&found, pos, 8);
-        if (found != score) break;
+    while (fbtreeNext(&it, &pos) && memcmp(pos, "BBBBBBBB", 8) == 0) {
         count++;
     }
     TEST_ASSERT(count == 5);

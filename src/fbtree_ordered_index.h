@@ -9,11 +9,6 @@
 typedef char *sds;
 typedef const char *const_sds;
 
-/* For zset entries, the string contains: [8-byte normalized score][element bytes]
- * The normalized score is stored in big-endian for lexicographic ordering.
- * TODO: Add endian conversion (htonu64/ntohu64) when packing/unpacking scores
- *       to support big-endian platforms. See endianconv.h */
-
 typedef struct fbtreeIndex fbtreeIndex;
 
 /* Opaque iterator type that can be stack allocated */
@@ -34,10 +29,10 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
 const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
 long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item);
 
-/* Score lookup - finds first element where 8-byte score prefix matches.
- * Returns true if found, with iterator positioned at that element.
- * Returns false if no such element exists. */
-bool fbtreeLookupByScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator);
+/* Score seek - positions iterator at first element with score >= given score.
+ * Always positions the iterator (even if no exact match). Use fbtreeNext to get elements.
+ * If all elements have score < given score, iterator is positioned past end. */
+void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator);
 
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
