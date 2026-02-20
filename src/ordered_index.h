@@ -125,5 +125,6 @@ static inline unsigned long orderedIndexDeleteRangeByRank(const OrderedIndexOps 
 
 /* Available implementations */
 extern const OrderedIndexOps skiplistOrderedIndexOps;
+extern const OrderedIndexOps fbtreeOrderedIndexOps;
 
 #endif /* ORDERED_INDEX_H */

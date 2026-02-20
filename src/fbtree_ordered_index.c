@@ -1,4 +1,5 @@
-/* Feature B-Tree implementation of the ordered index interface. */
+/* Feature B-Tree: a cache-optimized B+tree for sorted binary strings.
+ * This is a general-purpose data structure - zset-specific logic is in zset_fbtree_adapter.c */
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -6,7 +7,6 @@
 #include <assert.h>
 #include "config.h"
 #include "fbtree_ordered_index.h"
-#include "ordered_index.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "sds.h"
@@ -71,15 +71,21 @@ struct fbtreeIndex {
     leafNode *rightmost_leaf; /* Cache for fast-path append */
 };
 
+typedef enum {
+    ITER_AT_POSITION,  /* Positioned at a valid element */
+    ITER_BEFORE_START, /* Positioned before first element (fbtreePrev fails, fbtreeNext works) */
+    ITER_PAST_END,     /* Positioned past last element (fbtreeNext fails, fbtreePrev works) */
+} IterState;
+
 typedef struct {
     fbtreeIndex *fbt;
     leafNode *current_leaf;
     uint8_t current_index;
     uint8_t leaf_count;
+    IterState state;
 } iter;
 
 static_assert(sizeof(fbtreeIterator) >= sizeof(iter), "Opaque iterator size check");
-static_assert(sizeof(OrderedIndexIterator) >= sizeof(iter), "Opaque iterator size check");
 
 typedef struct {
     sds updated_anchor;  /* Pointer to updated anchor string if it's changed */
@@ -934,10 +940,6 @@ const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank) {
     return leaf->values[remaining];
 }
 
-static OrderedIndexItem *fbtreeGetByRank(OrderedIndex *idx, unsigned long rank) {
-    return (OrderedIndexItem *)fbtreeGetAtRank((fbtreeIndex *)idx, rank);
-}
-
 /* Get rank of an item given a direct pointer to it (from hashtable lookup).
  * The item pointer must be a valid pointer into a leaf node's values array. */
 long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item) {
@@ -970,10 +972,6 @@ long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item) {
     return -1; /* Not found */
 }
 
-static long fbtreeGetRank(OrderedIndex *idx, const OrderedIndexItem *pos) {
-    return fbtreeGetRankOfItem((fbtreeIndex *)idx, (const_sds)pos);
-}
-
 unsigned long fbtreeLength(fbtreeIndex *fbt) {
     return fbt->root ? getSubtreeSize(fbt->root) : 0;
 }
@@ -984,68 +982,73 @@ void fbtreeResetIterator(fbtreeIterator *iterator) {
     it->current_leaf = NULL;
     it->current_index = 0;
     it->leaf_count = 0;
-}
-
-static void iteratorSetNode(iter *it, leafNode *leaf, bool last_child) {
-    if (!leaf) {
-        it->fbt = NULL;
-        it->current_leaf = NULL;
-        it->current_index = 0;
-        it->leaf_count = 0;
-    } else {
-        it->current_leaf = leaf;
-        it->leaf_count = leaf->header.num_items;
-        it->current_index = last_child ? it->leaf_count : 0;
-    }
+    it->state = ITER_AT_POSITION;
 }
 
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt) {
     iter *it = iteratorFromOpaque(iterator);
-    if (!fbt->root) {
-        it->fbt = NULL;
-    } else {
-        it->fbt = fbt;
-    }
+    it->fbt = fbt->root ? fbt : NULL;
     it->current_leaf = NULL;
     it->current_index = 0;
     it->leaf_count = 0;
+    it->state = ITER_AT_POSITION;
 }
 
 bool fbtreeNext(fbtreeIterator *iterator, const_sds *pos) {
     iter *it = iteratorFromOpaque(iterator);
     if (!it->fbt) return false;
+    if (it->state == ITER_PAST_END) {
+        it->fbt = NULL; /* Invalidate on attempted forward from past-end */
+        return false;
+    }
+
     if (!it->current_leaf) {
         /* First call - use cached leftmost leaf for O(1) start */
-        iteratorSetNode(it, it->fbt->leftmost_leaf, false);
+        it->current_leaf = it->fbt->leftmost_leaf;
+        it->current_index = 0;
+        it->leaf_count = it->current_leaf ? it->current_leaf->header.num_items : 0;
+        it->state = ITER_AT_POSITION;
     }
 
     while (it->current_leaf) {
         if (it->current_index < it->leaf_count) {
-            *pos = it->current_leaf->values[it->current_index];
-            it->current_index++;
+            *pos = it->current_leaf->values[it->current_index++];
             return true;
         }
-        iteratorSetNode(it, it->current_leaf->next, false);
+        it->current_leaf = it->current_leaf->next;
+        it->current_index = 0;
+        it->leaf_count = it->current_leaf ? it->current_leaf->header.num_items : 0;
     }
+    it->fbt = NULL; /* Exhausted */
     return false;
 }
 
 bool fbtreePrev(fbtreeIterator *iterator, const_sds *pos) {
     iter *it = iteratorFromOpaque(iterator);
     if (!it->fbt) return false;
+    if (it->state == ITER_BEFORE_START) {
+        it->fbt = NULL; /* Invalidate on attempted backward from before-start */
+        return false;
+    }
+
     if (!it->current_leaf) {
         /* First call - use cached rightmost leaf for O(1) start */
-        iteratorSetNode(it, it->fbt->rightmost_leaf, true);
+        it->current_leaf = it->fbt->rightmost_leaf;
+        it->leaf_count = it->current_leaf ? it->current_leaf->header.num_items : 0;
+        it->current_index = it->leaf_count;
+        it->state = ITER_AT_POSITION;
     }
 
     while (it->current_leaf) {
         if (it->current_index > 0) {
-            it->current_index--;
-            *pos = it->current_leaf->values[it->current_index];
+            *pos = it->current_leaf->values[--it->current_index];
             return true;
         }
-        iteratorSetNode(it, it->current_leaf->prev, true);
+        it->current_leaf = it->current_leaf->prev;
+        it->leaf_count = it->current_leaf ? it->current_leaf->header.num_items : 0;
+        it->current_index = it->leaf_count;
     }
+    it->fbt = NULL; /* Exhausted */
     return false;
 }
 
@@ -1079,9 +1082,10 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
     it->current_leaf = leaf;
     it->leaf_count = leaf->header.num_items;
     it->current_index = (uint8_t)remaining;
+    it->state = ITER_AT_POSITION;
 }
 
-#define SCORE_SIZE 8 /* 8-byte normalized score prefix */
+#define SCORE_SIZE sizeof(double) /* Normalized score prefix size */
 
 /* Find child index for score lookup (8-byte prefix). Optimized: no bounds checking.
  * validated_len: score bytes already matched by ancestors - skip comparing these. */
@@ -1131,16 +1135,18 @@ static int leafNodeBinarySearchByScore(leafNode *leaf, const char *score) {
     return left;
 }
 
-/* Lookup by 8-byte score prefix. Positions iterator at first matching element.
- * Returns true if found, false if no element with this score exists. */
-bool fbtreeLookupByScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator) {
+/* Seek to first element with score >= given score. Always positions iterator.
+ * If score > all elements, positions past end (fbtreeNext fails, fbtreePrev works).
+ * If score < all elements, positions at start (fbtreePrev fails, fbtreeNext works). */
+void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator) {
     iter *it = iteratorFromOpaque(iterator);
     it->fbt = NULL;
     it->current_leaf = NULL;
     it->current_index = 0;
     it->leaf_count = 0;
+    it->state = ITER_AT_POSITION;
 
-    if (!fbt->root) return false;
+    if (!fbt->root) return;
 
     node *current = fbt->root;
     size_t validated_len = 0;
@@ -1157,16 +1163,21 @@ bool fbtreeLookupByScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *it
     leafNode *leaf = (leafNode *)current;
     int pos = leafNodeBinarySearchByScore(leaf, score);
 
-    /* Check if we found a match */
-    if (pos < leaf->header.num_items && memcmp(leaf->values[pos], score, SCORE_SIZE) == 0) {
-        it->fbt = fbt;
-        it->current_leaf = leaf;
-        it->leaf_count = leaf->header.num_items;
-        it->current_index = pos;
-        return true;
-    }
+    it->fbt = fbt;
+    it->current_leaf = leaf;
+    it->leaf_count = leaf->header.num_items;
+    it->current_index = pos;
 
-    return false;
+    if (pos >= leaf->header.num_items) {
+        /* Score beyond tree max */
+        it->current_leaf = NULL;
+        it->leaf_count = 0;
+        it->current_index = 0;
+        it->state = ITER_PAST_END;
+    } else if (pos == 0 && leaf == fbt->leftmost_leaf) {
+        /* At first element of tree - nothing before this */
+        it->state = ITER_BEFORE_START;
+    }
 }
 
 /* ========== Debug Functions ========== */
@@ -1322,122 +1333,3 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
 
     return result.valid && length_ok && caches_ok;
 }
-
-/* Wrapper functions for OrderedIndexOps interface */
-
-static OrderedIndexItem *fbtreeScoreEleInsert(OrderedIndex *idx, double score, const_sds ele) {
-    UNUSED(idx);
-    UNUSED(score);
-    UNUSED(ele);
-    assert(false); // TODO: implement insert with score/element
-    return NULL;
-}
-
-void fbtreeDeleteWrapper(OrderedIndex *idx, OrderedIndexItem *pos) {
-    UNUSED(idx);
-    UNUSED(pos);
-    assert(false); // TODO: implement
-}
-
-static void fbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
-    UNUSED(pos);
-    *ptr = NULL;
-    *len = 0;
-    assert(false); // TODO: pack score and element into binary string and use as key
-}
-
-static double fbtreeGetScore(const OrderedIndexItem *pos) {
-    UNUSED(pos);
-    assert(false); // TODO: pack score and element into binary string and use as key
-    return 0.0;
-}
-
-static OrderedIndexItem *fbtreeUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
-    UNUSED(idx);
-    UNUSED(pos);
-    UNUSED(newscore);
-    assert(false); // TODO: pack score and element into binary string and use as key
-    return NULL;
-}
-
-static unsigned long fbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    UNUSED(idx);
-    UNUSED(min);
-    UNUSED(max);
-    UNUSED(min_ex);
-    UNUSED(max_ex);
-    assert(false); // TODO: pack score and element into binary string and use as key
-    return 0;
-}
-
-static unsigned long fbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    UNUSED(idx);
-    UNUSED(start);
-    UNUSED(end);
-    assert(false); // TODO: implement delete range by rank
-    return 0;
-}
-
-
-static OrderedIndex *fbtreeCreateWrapper(void) {
-    return (OrderedIndex *)fbtreeCreate();
-}
-
-static void fbtreeFreeWrapper(OrderedIndex *idx) {
-    fbtreeFree((fbtreeIndex *)idx);
-}
-
-static unsigned long fbtreeLengthWrapper(OrderedIndex *idx) {
-    return fbtreeLength((fbtreeIndex *)idx);
-}
-
-static void fbtreeInitIteratorWrapper(OrderedIndexIterator *iter, OrderedIndex *idx) {
-    fbtreeInitIterator((fbtreeIterator *)iter, (fbtreeIndex *)idx);
-}
-
-static void fbtreeResetIteratorWrapper(OrderedIndexIterator *iter) {
-    fbtreeResetIterator((fbtreeIterator *)iter);
-}
-
-static bool fbtreeNextWrapper(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return fbtreeNext((fbtreeIterator *)iter, (const_sds *)pos);
-}
-
-static bool fbtreePrevWrapper(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
-    return fbtreePrev((fbtreeIterator *)iter, (const_sds *)pos);
-}
-
-static void fbtreeSeekToRankWrapper(OrderedIndexIterator *iter, unsigned long rank) {
-    fbtreeSeekToRank((fbtreeIterator *)iter, rank);
-}
-
-static void fbtreeSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    UNUSED(iter);
-    UNUSED(min);
-    UNUSED(max);
-    UNUSED(min_ex);
-    UNUSED(max_ex);
-    UNUSED(offset);
-    assert(false); // TODO: pack score and element into binary string and use as key
-}
-
-const OrderedIndexOps fbtreeOrderedIndexOps = {
-    .create = fbtreeCreateWrapper,
-    .free = fbtreeFreeWrapper,
-    .insert = fbtreeScoreEleInsert,
-    .delete = fbtreeDeleteWrapper,
-    .get_by_rank = fbtreeGetByRank,
-    .get_rank = fbtreeGetRank,
-    .length = fbtreeLengthWrapper,
-    .init_iterator = fbtreeInitIteratorWrapper,
-    .reset_iterator = fbtreeResetIteratorWrapper,
-    .next = fbtreeNextWrapper,
-    .prev = fbtreePrevWrapper,
-    .seek_to_rank = fbtreeSeekToRankWrapper,
-    .seek_to_score_range = fbtreeSeekToScoreRange,
-    .get_element_raw = fbtreeGetElementRaw,
-    .get_score = fbtreeGetScore,
-    .update_score = fbtreeUpdateScore,
-    .delete_range_by_score = fbtreeDeleteRangeByScore,
-    .delete_range_by_rank = fbtreeDeleteRangeByRank,
-};

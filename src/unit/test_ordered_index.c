@@ -789,157 +789,6 @@ static int test_traversal_edge_cases_generic(const OrderedIndexOps *ops) {
     return 0;
 }
 
-/* Test wrappers for skiplist implementation */
-
-int test_ordered_index_skiplist_create_free(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_create_free_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_insert_single(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_insert_single_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_insert_multiple(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_insert_multiple_ordered_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_duplicate_scores(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_duplicate_scores_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_rank_operations(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_rank_operations_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_delete(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_delete_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_update_score(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_update_score_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_delete_range_by_score(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_delete_range_by_score_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_delete_range_by_rank(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_delete_range_by_rank_generic(&skiplistOrderedIndexOps);
-}
-
-
-int test_ordered_index_skiplist_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_delete_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_delete_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_rank_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_rank_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_duplicate_insert(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_duplicate_insert_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_update_score_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_update_score_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_range_delete_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_range_delete_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-
-int test_ordered_index_skiplist_traversal_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_traversal_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_mixed_operations_rank_integrity(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_mixed_operations_rank_integrity_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_backward_traversal_after_deletions(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_backward_traversal_after_deletions_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_lexicographic_edge_cases(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_lexicographic_edge_cases_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_range_boundary_precision(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_range_boundary_precision_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_special_double_values(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_special_double_values_generic(&skiplistOrderedIndexOps);
-}
-
 static int test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
@@ -1056,20 +905,6 @@ static int test_reverse_iteration_generic(const OrderedIndexOps *ops) {
     return 0;
 }
 
-int test_ordered_index_skiplist_seek_to_rank(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_seek_to_rank_generic(&skiplistOrderedIndexOps);
-}
-
-int test_ordered_index_skiplist_reverse_iteration(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_reverse_iteration_generic(&skiplistOrderedIndexOps);
-}
-
 static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
@@ -1148,13 +983,6 @@ static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     return 0;
 }
 
-int test_ordered_index_skiplist_seek_to_score_range(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_seek_to_score_range_generic(&skiplistOrderedIndexOps);
-}
-
 static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
@@ -1212,9 +1040,150 @@ static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops
     return 0;
 }
 
-int test_ordered_index_skiplist_seek_to_score_range_iteration(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    return test_seek_to_score_range_iteration_generic(&skiplistOrderedIndexOps);
+/* Test ZREVRANGEBYSCORE +inf behavior: seek to last element and iterate backwards.
+ * This is the pattern used by ZREVRANGEBYSCORE -inf +inf to get all elements in reverse. */
+static int test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    /* Insert elements with scores 1-5 */
+    for (int i = 1; i <= 5; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        sds ele = sdsnew(buf);
+        orderedIndexInsert(ops, idx, (double)i, ele);
+        sdsfree(ele);
+    }
+
+    OrderedIndexIterator iter;
+    OrderedIndexItem *pos;
+
+    /* Seek to [-inf, +inf] with offset -1 (last element), then iterate backwards.
+     * This is how ZREVRANGEBYSCORE -inf +inf works. */
+    orderedIndexInitIterator(ops, &iter, idx);
+    orderedIndexSeekToScoreRange(ops, &iter, -INFINITY, INFINITY, 0, 0, -1);
+    int count = 0;
+    double expected = 5.0;
+    while (orderedIndexNext(ops, &iter, &pos)) {
+        if (count == 0) {
+            TEST_ASSERT(orderedIndexGetScore(ops, pos) == 5.0);
+        }
+        count++;
+        break; /* Just verify first element is correct */
+    }
+    /* Now iterate backwards through all elements */
+    count = 0;
+    expected = 5.0;
+    while (orderedIndexPrev(ops, &iter, &pos)) {
+        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        expected -= 1.0;
+        count++;
+    }
+    TEST_ASSERT(count == 5);
+    orderedIndexResetIterator(ops, &iter);
+
+    orderedIndexFree(ops, idx);
+    return 0;
 }
+
+/* Test ZRANGEBYSCORE -inf behavior: seek to first element and iterate forwards.
+ * This is the pattern used by ZRANGEBYSCORE -inf +inf to get all elements. */
+static int test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    /* Insert elements with scores 1-5 */
+    for (int i = 1; i <= 5; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        sds ele = sdsnew(buf);
+        orderedIndexInsert(ops, idx, (double)i, ele);
+        sdsfree(ele);
+    }
+
+    OrderedIndexIterator iter;
+    OrderedIndexItem *pos;
+
+    /* Seek to [-inf, +inf] with offset 0 (first element), then iterate forwards.
+     * This is how ZRANGEBYSCORE -inf +inf works. */
+    orderedIndexInitIterator(ops, &iter, idx);
+    orderedIndexSeekToScoreRange(ops, &iter, -INFINITY, INFINITY, 0, 0, 0);
+    int count = 0;
+    double expected = 1.0;
+    while (orderedIndexNext(ops, &iter, &pos)) {
+        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        expected += 1.0;
+        count++;
+    }
+    TEST_ASSERT(count == 5);
+    orderedIndexResetIterator(ops, &iter);
+
+    orderedIndexFree(ops, idx);
+    return 0;
+}
+
+/* ========== Test Wrappers ========== */
+/* The test generator script requires function definitions with '{' on the same line */
+
+#define WRAP(impl, test) \
+    int test_ordered_index_##impl##_##test(int argc, char **argv, int flags) { \
+        UNUSED(argc); UNUSED(argv); UNUSED(flags); \
+        return test_##test##_generic(&impl##OrderedIndexOps); \
+    }
+
+/* Skiplist wrappers */
+int test_ordered_index_skiplist_create_free(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_create_free_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_insert_single(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_single_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_insert_multiple_ordered(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_multiple_ordered_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_duplicate_scores(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_scores_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_rank_operations(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_operations_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_delete(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_update_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_delete_range_by_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_range_by_score_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_delete_range_by_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_range_by_rank_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_rank_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_duplicate_insert(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_insert_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_update_score_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_range_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_range_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_traversal_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_traversal_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_mixed_operations_rank_integrity(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_mixed_operations_rank_integrity_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_backward_traversal_after_deletions(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_backward_traversal_after_deletions_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_lexicographic_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_lexicographic_edge_cases_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_range_boundary_precision(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_range_boundary_precision_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_special_double_values(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_special_double_values_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_seek_to_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_rank_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_reverse_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_reverse_iteration_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_seek_to_score_range(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_score_range_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_seek_to_score_range_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_score_range_iteration_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_seek_inf_reverse_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_inf_reverse_iteration_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_seek_inf_forward_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_inf_forward_iteration_generic(&skiplistOrderedIndexOps); }
+
+/* Fbtree wrappers */
+int test_ordered_index_fbtree_create_free(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_create_free_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_insert_single(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_single_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_insert_multiple_ordered(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_multiple_ordered_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_duplicate_scores(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_scores_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_rank_operations(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_operations_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_delete(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_update_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_edge_cases_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_edge_cases_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_rank_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_edge_cases_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_duplicate_insert(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_insert_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_update_score_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_edge_cases_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_traversal_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_traversal_edge_cases_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_mixed_operations_rank_integrity(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_mixed_operations_rank_integrity_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_backward_traversal_after_deletions(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_backward_traversal_after_deletions_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_lexicographic_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_lexicographic_edge_cases_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_special_double_values(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_special_double_values_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_seek_to_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_rank_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_reverse_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_reverse_iteration_generic(&fbtreeOrderedIndexOps); }
+
+/* NOTE: These tests require delete_range_by_score/rank which are not yet implemented:
+ * - test_ordered_index_fbtree_delete_range_by_score
+ * - test_ordered_index_fbtree_delete_range_by_rank
+ * - test_ordered_index_fbtree_range_delete_edge_cases
+ * - test_ordered_index_fbtree_range_boundary_precision
+ * - test_ordered_index_fbtree_seek_to_score_range
+ * - test_ordered_index_fbtree_seek_to_score_range_iteration
+ */
