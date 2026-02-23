@@ -18,7 +18,7 @@ on:
     inputs:
       skipjobs:
         description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,lttng"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,s390x,lttng"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
@@ -183,6 +183,41 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate
+  test-s390x:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_call' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable') ||
+        (github.event_name == 'pull_request_target' && github.event.label.name == 'run-extra-tests')) &&
+      !contains(github.event.inputs.skipjobs, 's390x')
+    timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+        run: |
+          echo "GITHUB_REPOSITORY=${{inputs.use_repo || github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{inputs.use_git_ref || github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name) || env.GITHUB_REPOSITORY || github.repository }}
+          ref: ${{ (github.event_name == 'pull_request_target' && github.event.pull_request.head.sha) || env.GITHUB_HEAD_REF || github.ref }}
+      - name: Build and test on s390x (big endian)
+        uses: uraimo/run-on-arch-action@d94c13912ea685de38fccc1109385b83fd79427d # v3.0.1
+        with:
+          arch: s390x
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          run: |
+            apt-get update
+            apt-get install -y build-essential tcl8.6 tclx procps
+            make all-with-unit-tests SERVER_CFLAGS='-Werror'
+            ./runtest --verbose --tags -slow --dump-logs
+            ./src/valkey-unit-tests
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
@@ -1407,6 +1442,7 @@ jobs:
     needs:
       - test-ubuntu-jemalloc
       - test-ubuntu-arm
+      - test-s390x
       - test-ubuntu-jemalloc-fortify
       - test-ubuntu-libc-malloc
       - test-ubuntu-no-malloc-usable-size
@@ -1447,6 +1483,7 @@ jobs:
     needs:
       - test-ubuntu-jemalloc
       - test-ubuntu-arm
+      - test-s390x
       - test-ubuntu-jemalloc-fortify
       - test-ubuntu-libc-malloc
       - test-ubuntu-no-malloc-usable-size
