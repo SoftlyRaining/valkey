@@ -36,7 +36,7 @@ typedef struct {
 
 typedef struct {
     node header;
-    char embedded_prefix[EMBED_PREFIX_LEN]; // TODO: use pointer for larger prefix
+    char embedded_prefix[EMBED_PREFIX_LEN]; /* Short prefix inline; long prefix stores char* at aligned offset */
     size_t prefix_len;
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     sds anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
@@ -112,6 +112,43 @@ static inline iter *iteratorFromOpaque(fbtreeIterator *iterator) {
     return (iter *)(void *)iterator;
 }
 
+/* Long prefix: when prefix_len > EMBED_PREFIX_LEN, pointer stored at aligned offset within embedded_prefix.
+ * Compute offset to next pointer-aligned position within embedded_prefix. */
+#define LONG_PREFIX_PTR_OFFSET \
+    ((sizeof(void *) - (offsetof(innerNode, embedded_prefix) % sizeof(void *))) % sizeof(void *))
+static_assert(EMBED_PREFIX_LEN >= LONG_PREFIX_PTR_OFFSET + sizeof(char *), "embedded_prefix must fit aligned pointer");
+
+static inline bool innerNodeHasLongPrefix(innerNode *inner) {
+    return inner->prefix_len > EMBED_PREFIX_LEN;
+}
+
+static inline const char *innerNodeGetPrefix(innerNode *inner) {
+    if (innerNodeHasLongPrefix(inner)) {
+        char **ptr = (char **)&inner->embedded_prefix[LONG_PREFIX_PTR_OFFSET];
+        return *ptr;
+    }
+    return inner->embedded_prefix;
+}
+
+static void innerNodeFreePrefix(innerNode *inner) {
+    if (innerNodeHasLongPrefix(inner)) {
+        char **ptr = (char **)&inner->embedded_prefix[LONG_PREFIX_PTR_OFFSET];
+        zfree(*ptr);
+    }
+}
+
+static void innerNodeSetPrefix(innerNode *inner, const char *data, size_t len) {
+    innerNodeFreePrefix(inner);
+    inner->prefix_len = len;
+    if (len > EMBED_PREFIX_LEN) {
+        char **ptr = (char **)&inner->embedded_prefix[LONG_PREFIX_PTR_OFFSET];
+        *ptr = zmalloc(len);
+        memcpy(*ptr, data, len);
+    } else if (len > 0) {
+        memcpy(inner->embedded_prefix, data, len);
+    }
+}
+
 static innerNode *innerNodeCreate(void) {
     innerNode *node = zmalloc(sizeof(*node));
     node->header.is_leaf = false;
@@ -160,6 +197,7 @@ static void freeNodeRecursive(node *n) {
         zfree(leaf);
     } else {
         innerNode *inner = (innerNode *)n;
+        innerNodeFreePrefix(inner);
         for (int i = 0; i < inner->header.num_items; i++) {
             if (inner->children[i] != NULL) {
                 freeNodeRecursive(inner->children[i]);
@@ -208,10 +246,9 @@ static void updateCommonPrefix(innerNode *inner) {
     while (len < max_len && first_anchor[len] == last_anchor[len]) len++;
 
     bool prefix_changed = (len != inner->prefix_len) ||
-                          (len > 0 && memcmp(inner->embedded_prefix, first_anchor, len) != 0);
+                          (len > 0 && memcmp(innerNodeGetPrefix(inner), first_anchor, len) != 0);
     if (prefix_changed) {
-        memcpy(inner->embedded_prefix, first_anchor, len);
-        inner->prefix_len = len;
+        innerNodeSetPrefix(inner, first_anchor, len);
         recomputeFeatures(inner);
     }
 }
@@ -296,8 +333,8 @@ static innerNode *innerNodeSplit(innerNode *left_node) {
     left_node->header.num_items = num_left_keys;
 
     /* each covers a smaller range of the dataset, so prefix could be longer now */
-    memcpy(right_node->embedded_prefix, left_node->embedded_prefix, sizeof(left_node->embedded_prefix)); // TODO: only copy size of prefix // TODO: long prefix support
-    right_node->prefix_len = left_node->prefix_len;
+    /* Copy prefix from left to right before updateCommonPrefix potentially changes it */
+    innerNodeSetPrefix(right_node, innerNodeGetPrefix(left_node), left_node->prefix_len); // TODO: only copy size of prefix? Optimize to avoid copy maybe?
     updateCommonPrefix(right_node);
     updateCommonPrefix(left_node);
     return right_node;
@@ -653,7 +690,8 @@ static int findChildIndex(innerNode *inner, const_sds string, size_t validated_l
     /* Only compare prefix bytes beyond what ancestors already validated */
     if (inner->prefix_len > validated_len) {
         size_t cmp_len = inner->prefix_len - validated_len;
-        int cmp = memcmp(string + validated_len, inner->embedded_prefix + validated_len, cmp_len);
+        const char *prefix = innerNodeGetPrefix(inner);
+        int cmp = memcmp(string + validated_len, prefix + validated_len, cmp_len);
         if (cmp < 0) return 0;
         if (cmp > 0) return inner->header.num_items;
     }
@@ -1094,7 +1132,8 @@ static int findChildIndexByScore(innerNode *inner, const char *score, size_t val
     if (inner->prefix_len > validated_len) {
         size_t cmp_len = (inner->prefix_len < SCORE_SIZE ? inner->prefix_len : SCORE_SIZE) - validated_len;
         if (cmp_len > 0) {
-            int cmp = memcmp(score + validated_len, inner->embedded_prefix + validated_len, cmp_len);
+            const char *prefix = innerNodeGetPrefix(inner);
+            int cmp = memcmp(score + validated_len, prefix + validated_len, cmp_len);
             if (cmp < 0) return 0;
             if (cmp > 0) return inner->header.num_items;
         }
@@ -1244,9 +1283,10 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         const_sds anchor = inner->anchors[i];
         node *child = inner->children[i];
 
-        /* Validate anchor starts with embedded_prefix */
+        /* Validate anchor starts with prefix */
+        const char *prefix = innerNodeGetPrefix(inner);
         bool prefix_ok = sdslen(anchor) >= inner->prefix_len &&
-                         memcmp(anchor, inner->embedded_prefix, inner->prefix_len) == 0;
+                         memcmp(anchor, prefix, inner->prefix_len) == 0;
 
         /* Validate anchor matches child's high key */
         const_sds expected = child->is_leaf
