@@ -93,6 +93,7 @@ set ::log_req_res 0
 set ::force_resp3 0
 set ::solo_tests_count 0
 set ::debug_defrag 0
+set ::qemu 0
 set ::completed_tests 0
 set ::total_loops 1
 
@@ -714,6 +715,7 @@ proc print_help_screen {} {
         "--large-memory     Run tests using over 100mb."
         "--debug-defrag     Indicate the test is running against server compiled with"
         "                   DEBUG_FORCE_DEFRAG option."
+        "--qemu             Indicate the test is running under QEMU emulation."
         "--help             Print this help screen."
     } "\n"]
 }
@@ -865,6 +867,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::ignoredigest 1
     } elseif {$opt eq {--debug-defrag}} {
         set ::debug_defrag 1
+    } elseif {$opt eq {--qemu}} {
+        set ::qemu 1
     } elseif {$opt eq {--help}} {
         print_help_screen
         exit 0

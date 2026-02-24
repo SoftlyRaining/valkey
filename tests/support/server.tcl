@@ -263,6 +263,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {$::qemu && [lsearch $tags "qemu:skip"] >= 0} {
+        set err "Not supported under QEMU emulation"
+        return 0
+    }
+
     if {$::tcl_version < 8.6 && [lsearch $tags "ipv6"] >= 0} {
         set err "TCL version is too low and does not support this"
         return 0

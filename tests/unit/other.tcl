@@ -459,7 +459,7 @@ proc read_proc_title {pid} {
     return $cmdline
 }
 
-start_server {tags {"other external:skip"}} {
+start_server {tags {"other external:skip qemu:skip"}} {
     test {Process title set as expected} {
         # Test only on Linux where it's easy to get cmdline without relying on tools.
         # Skip valgrind as it messes up the arguments.

@@ -216,8 +216,8 @@ jobs:
             apt-get update
             apt-get install -y build-essential tcl8.6 tclx procps
             make all-with-unit-tests SERVER_CFLAGS='-Werror'
-            ./runtest --verbose --tags -slow --dump-logs
             ./src/valkey-unit-tests
+            ./runtest --qemu --verbose --tags -slow --dump-logs
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
