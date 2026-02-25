@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <string.h>
+#include "endianconv.h"
 #include "fbtree_ordered_index.h"
 #include "ordered_index.h"
 #include "sds.h"
@@ -28,8 +29,6 @@ static_assert(SCORE_SIZE == 8, "Score size must be 8 bytes for fbtreeLookupBySco
  * IEEE 754 double bit layout: [sign:1][exponent:11][mantissa:52]
  * - Positive numbers: flip sign bit (0->1) to sort after negatives
  * - Negative numbers: flip all bits to reverse their order
- *
- * TODO: Add htobe64/be64toh for big-endian platform support (see endianconv.h)
  */
 
 static inline uint64_t scoreToSortable(double score) {
@@ -42,15 +41,12 @@ static inline uint64_t scoreToSortable(double score) {
         bits ^= ((uint64_t)1 << 63);
     }
     /* Convert to big-endian for lexicographic comparison */
-    /* TODO: use htobe64() for portability */
-    uint64_t be = __builtin_bswap64(bits);
-    return be;
+    return htonu64(bits);
 }
 
 static inline double sortableToScore(uint64_t be) {
     /* Convert from big-endian */
-    /* TODO: use be64toh() for portability */
-    uint64_t bits = __builtin_bswap64(be);
+    uint64_t bits = ntohu64(be);
     /* Reverse the transformation */
     if (bits & ((uint64_t)1 << 63)) {
         bits ^= ((uint64_t)1 << 63);
