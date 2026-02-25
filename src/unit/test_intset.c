@@ -40,13 +40,22 @@ static int checkConsistency(intset *is) {
 
         if (encoding == INTSET_ENC_INT16) {
             int16_t *i16 = (int16_t *)is->contents;
-            TEST_ASSERT(i16[i] < i16[i + 1]);
+            int16_t a = i16[i], b = i16[i + 1];
+            memrev16ifbe(&a);
+            memrev16ifbe(&b);
+            TEST_ASSERT(a < b);
         } else if (encoding == INTSET_ENC_INT32) {
             int32_t *i32 = (int32_t *)is->contents;
-            TEST_ASSERT(i32[i] < i32[i + 1]);
+            int32_t a = i32[i], b = i32[i + 1];
+            memrev32ifbe(&a);
+            memrev32ifbe(&b);
+            TEST_ASSERT(a < b);
         } else {
             int64_t *i64 = (int64_t *)is->contents;
-            TEST_ASSERT(i64[i] < i64[i + 1]);
+            int64_t a = i64[i], b = i64[i + 1];
+            memrev64ifbe(&a);
+            memrev64ifbe(&b);
+            TEST_ASSERT(a < b);
         }
     }
     return 1;
