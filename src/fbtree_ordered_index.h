@@ -18,6 +18,8 @@ typedef uint64_t fbtreeIterator[3];
 fbtreeIndex *fbtreeCreate(void);
 sds fbtreeInsert(fbtreeIndex *fbt, sds string);
 bool fbtreeDelete(fbtreeIndex *fbt, const_sds key);
+sds fbtreePopMin(fbtreeIndex *fbt);
+sds fbtreePopMax(fbtreeIndex *fbt);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);

@@ -195,8 +195,13 @@ zskiplistNode *zslGetHeader(zskiplist *zsl) {
     return &zsl->header;
 }
 
+/* Helper function to get first element (head) of skiplist. Returns NULL if empty. */
+zskiplistNode *zslGetFirst(const zskiplist *zsl) {
+    return zsl->header.level[0].forward;
+}
+
 /* Free the specified skiplist node. */
-static void zslFreeNode(zskiplistNode *node) {
+void zslFreeNode(zskiplistNode *node) {
     zfree(node);
 }
 
@@ -336,8 +341,8 @@ static void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **upda
     zsl->header.length--;
 }
 
-/* Delete specified node from the skiplist. */
-void zslDelete(zskiplist *zsl, zskiplistNode *node) {
+/* Detach node from skiplist without freeing. Caller owns the node after this. */
+zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     zskiplistNode *x = zslGetHeader(zsl);
     for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
@@ -346,11 +351,14 @@ void zslDelete(zskiplist *zsl, zskiplistNode *node) {
         }
         update[i] = x;
     }
-
-    /* We should have arrived at the correct node */
     serverAssert(x->level[0].forward == node);
-
     zslDeleteNode(zsl, node, update);
+    return node;
+}
+
+/* Delete specified node from the skiplist. */
+void zslDelete(zskiplist *zsl, zskiplistNode *node) {
+    zslDetachNode(zsl, node);
     zslFreeNode(node);
 }
 

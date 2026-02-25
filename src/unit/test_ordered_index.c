@@ -4,6 +4,7 @@
 #include "test_help.h"
 #include "../server.h"
 #include "../ordered_index.h"
+#include "../fbtree_ordered_index.h"
 
 /* Generic tests that work with any OrderedIndex implementation */
 
@@ -181,6 +182,80 @@ static int test_delete_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
     orderedIndexResetIterator(ops, &iter);
+
+    orderedIndexFree(ops, idx);
+    return 0;
+}
+
+static int test_pop_first_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    /* Pop from empty - should return NULL */
+    TEST_ASSERT(orderedIndexPopFirst(ops, idx) == NULL);
+
+    /* Insert elements */
+    for (int i = 0; i < 5; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        sds ele = sdsnew(buf);
+        orderedIndexInsert(ops, idx, (double)i, ele);
+        sdsfree(ele);
+    }
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 5);
+
+    /* Pop first - should get score 0.0 */
+    OrderedIndexItem *item = orderedIndexPopFirst(ops, idx);
+    TEST_ASSERT(item != NULL);
+    TEST_ASSERT(orderedIndexGetScore(ops, item) == 0.0);
+    const char *ptr;
+    size_t len;
+    orderedIndexGetElementRaw(ops, item, &ptr, &len);
+    TEST_ASSERT(len == 4 && memcmp(ptr, "key0", 4) == 0);
+    orderedIndexFreeItem(ops, item);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 4);
+
+    /* Pop again - should get score 1.0 */
+    item = orderedIndexPopFirst(ops, idx);
+    TEST_ASSERT(orderedIndexGetScore(ops, item) == 1.0);
+    orderedIndexFreeItem(ops, item);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
+
+    orderedIndexFree(ops, idx);
+    return 0;
+}
+
+static int test_pop_last_generic(const OrderedIndexOps *ops) {
+    OrderedIndex *idx = orderedIndexCreate(ops);
+
+    /* Pop from empty - should return NULL */
+    TEST_ASSERT(orderedIndexPopLast(ops, idx) == NULL);
+
+    /* Insert elements */
+    for (int i = 0; i < 5; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "key%d", i);
+        sds ele = sdsnew(buf);
+        orderedIndexInsert(ops, idx, (double)i, ele);
+        sdsfree(ele);
+    }
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 5);
+
+    /* Pop last - should get score 4.0 */
+    OrderedIndexItem *item = orderedIndexPopLast(ops, idx);
+    TEST_ASSERT(item != NULL);
+    TEST_ASSERT(orderedIndexGetScore(ops, item) == 4.0);
+    const char *ptr;
+    size_t len;
+    orderedIndexGetElementRaw(ops, item, &ptr, &len);
+    TEST_ASSERT(len == 4 && memcmp(ptr, "key4", 4) == 0);
+    orderedIndexFreeItem(ops, item);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 4);
+
+    /* Pop again - should get score 3.0 */
+    item = orderedIndexPopLast(ops, idx);
+    TEST_ASSERT(orderedIndexGetScore(ops, item) == 3.0);
+    orderedIndexFreeItem(ops, item);
+    TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
 
     orderedIndexFree(ops, idx);
     return 0;
@@ -1136,6 +1211,8 @@ int test_ordered_index_skiplist_insert_multiple_ordered(int argc, char **argv, i
 int test_ordered_index_skiplist_duplicate_scores(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_scores_generic(&skiplistOrderedIndexOps); }
 int test_ordered_index_skiplist_rank_operations(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_operations_generic(&skiplistOrderedIndexOps); }
 int test_ordered_index_skiplist_delete(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_pop_first(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_first_generic(&skiplistOrderedIndexOps); }
+int test_ordered_index_skiplist_pop_last(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_last_generic(&skiplistOrderedIndexOps); }
 int test_ordered_index_skiplist_update_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_generic(&skiplistOrderedIndexOps); }
 int test_ordered_index_skiplist_delete_range_by_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_range_by_score_generic(&skiplistOrderedIndexOps); }
 int test_ordered_index_skiplist_delete_range_by_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_range_by_rank_generic(&skiplistOrderedIndexOps); }
@@ -1165,6 +1242,8 @@ int test_ordered_index_fbtree_insert_multiple_ordered(int argc, char **argv, int
 int test_ordered_index_fbtree_duplicate_scores(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_scores_generic(&fbtreeOrderedIndexOps); }
 int test_ordered_index_fbtree_rank_operations(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_operations_generic(&fbtreeOrderedIndexOps); }
 int test_ordered_index_fbtree_delete(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_pop_first(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_first_generic(&fbtreeOrderedIndexOps); }
+int test_ordered_index_fbtree_pop_last(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_last_generic(&fbtreeOrderedIndexOps); }
 int test_ordered_index_fbtree_update_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_generic(&fbtreeOrderedIndexOps); }
 int test_ordered_index_fbtree_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_edge_cases_generic(&fbtreeOrderedIndexOps); }
 int test_ordered_index_fbtree_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_edge_cases_generic(&fbtreeOrderedIndexOps); }

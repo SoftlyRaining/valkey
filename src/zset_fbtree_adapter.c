@@ -104,6 +104,56 @@ static void zsetFbtreeDelete(OrderedIndex *idx, OrderedIndexItem *pos) {
     fbtreeDelete((fbtreeIndex *)idx, (const_sds)pos);
 }
 
+static OrderedIndexItem *zsetFbtreeUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
+    /* Extract element, delete old, insert with new score */
+    const_sds packed = (const_sds)pos;
+    size_t ele_len;
+    const char *ele = unpackElement(packed, &ele_len);
+
+    /* Create temp sds for element (insert will take ownership of new packed string) */
+    sds ele_copy = sdsnewlen(ele, ele_len);
+    sds new_packed = packScoreElement(newscore, ele_copy);
+    sdsfree(ele_copy);
+
+    // TODO: optimize? what if score is the same? what if order doesn't change? What if it moves within the same leaf node?
+    fbtreeDelete((fbtreeIndex *)idx, packed);
+    return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)idx, new_packed);
+}
+
+static OrderedIndexItem *zsetFbtreePopFirst(OrderedIndex *idx) {
+    return (OrderedIndexItem *)fbtreePopMin((fbtreeIndex *)idx);
+}
+
+static OrderedIndexItem *zsetFbtreePopLast(OrderedIndex *idx) {
+    return (OrderedIndexItem *)fbtreePopMax((fbtreeIndex *)idx);
+}
+
+static void zsetFbtreeFreeItem(OrderedIndexItem *item) {
+    sdsfree((sds)item);
+}
+
+static unsigned long zsetFbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
+    UNUSED(idx);
+    UNUSED(min);
+    UNUSED(max);
+    UNUSED(min_ex);
+    UNUSED(max_ex);
+    assert(false); /* TODO: implement using score prefix iteration */
+    return 0;
+}
+
+static unsigned long zsetFbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
+    UNUSED(idx);
+    UNUSED(start);
+    UNUSED(end);
+    assert(false); /* TODO: implement using rank-based iteration + delete */
+    return 0;
+}
+
+static unsigned long zsetFbtreeLength(OrderedIndex *idx) {
+    return fbtreeLength((fbtreeIndex *)idx);
+}
+
 static OrderedIndexItem *zsetFbtreeGetByRank(OrderedIndex *idx, unsigned long rank) {
     /* Interface uses 1-based ranks, fbtree uses 0-based */
     if (rank == 0) return NULL;
@@ -116,8 +166,12 @@ static long zsetFbtreeGetRank(OrderedIndex *idx, const OrderedIndexItem *pos) {
     return (rank >= 0) ? rank + 1 : rank;
 }
 
-static unsigned long zsetFbtreeLength(OrderedIndex *idx) {
-    return fbtreeLength((fbtreeIndex *)idx);
+static void zsetFbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
+    *ptr = unpackElement((const_sds)pos, len);
+}
+
+static double zsetFbtreeGetScore(const OrderedIndexItem *pos) {
+    return unpackScore((const_sds)pos);
 }
 
 static void zsetFbtreeInitIterator(OrderedIndexIterator *iter, OrderedIndex *idx) {
@@ -188,67 +242,32 @@ static void zsetFbtreeSeekToScoreRange(OrderedIndexIterator *iter, double min, d
     }
 }
 
-static void zsetFbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
-    *ptr = unpackElement((const_sds)pos, len);
-}
-
-static double zsetFbtreeGetScore(const OrderedIndexItem *pos) {
-    return unpackScore((const_sds)pos);
-}
-
-static OrderedIndexItem *zsetFbtreeUpdateScore(OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {
-    /* Extract element, delete old, insert with new score */
-    const_sds packed = (const_sds)pos;
-    size_t ele_len;
-    const char *ele = unpackElement(packed, &ele_len);
-
-    /* Create temp sds for element (insert will take ownership of new packed string) */
-    sds ele_copy = sdsnewlen(ele, ele_len);
-    sds new_packed = packScoreElement(newscore, ele_copy);
-    sdsfree(ele_copy);
-
-    // TODO: optimize? what if score is the same? what if order doesn't change? What if it moves within the same leaf node?
-    fbtreeDelete((fbtreeIndex *)idx, packed);
-    return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)idx, new_packed);
-}
-
-static unsigned long zsetFbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    UNUSED(idx);
-    UNUSED(min);
-    UNUSED(max);
-    UNUSED(min_ex);
-    UNUSED(max_ex);
-    assert(false); /* TODO: implement using score prefix iteration */
-    return 0;
-}
-
-static unsigned long zsetFbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    UNUSED(idx);
-    UNUSED(start);
-    UNUSED(end);
-    assert(false); /* TODO: implement using rank-based iteration + delete */
-    return 0;
-}
-
 const OrderedIndexOps fbtreeOrderedIndexOps = {
+    /* Lifecycle */
     .create = zsetFbtreeCreate,
     .free = zsetFbtreeFree,
+    /* Modification */
     .insert = zsetFbtreeInsert,
     .delete = zsetFbtreeDelete,
+    .update_score = zsetFbtreeUpdateScore,
+    .pop_first = zsetFbtreePopFirst,
+    .pop_last = zsetFbtreePopLast,
+    .free_item = zsetFbtreeFreeItem,
+    .delete_range_by_score = zsetFbtreeDeleteRangeByScore,
+    .delete_range_by_rank = zsetFbtreeDeleteRangeByRank,
+    /* Query */
+    .length = zsetFbtreeLength,
     .get_by_rank = zsetFbtreeGetByRank,
     .get_rank = zsetFbtreeGetRank,
-    .length = zsetFbtreeLength,
+    .get_element_raw = zsetFbtreeGetElementRaw,
+    .get_score = zsetFbtreeGetScore,
+    /* Iterator */
     .init_iterator = zsetFbtreeInitIterator,
     .reset_iterator = zsetFbtreeResetIterator,
     .next = zsetFbtreeNext,
     .prev = zsetFbtreePrev,
     .seek_to_rank = zsetFbtreeSeekToRank,
     .seek_to_score_range = zsetFbtreeSeekToScoreRange,
-    .get_element_raw = zsetFbtreeGetElementRaw,
-    .get_score = zsetFbtreeGetScore,
-    .update_score = zsetFbtreeUpdateScore,
-    .delete_range_by_score = zsetFbtreeDeleteRangeByScore,
-    .delete_range_by_rank = zsetFbtreeDeleteRangeByRank,
 };
 
 /* ========== Test Wrappers ========== */

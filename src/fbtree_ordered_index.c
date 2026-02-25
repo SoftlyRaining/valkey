@@ -94,12 +94,12 @@ typedef struct {
     sds inserted_item;   /* Pointer to the newly inserted item in the leaf */
 } insertResult;
 
-/* Hint for optimized insert path - allows skipping inner node searches */
+/* Hint for optimized tree traversal - allows skipping inner node searches */
 typedef enum {
     HINT_NONE,      /* No hint - use normal search */
-    HINT_RIGHTMOST, /* Insert goes to rightmost child at each level */
-    HINT_LEFTMOST   /* Insert goes to leftmost child at each level */
-} InsertHint;
+    HINT_LEFTMOST,  /* Traverse to leftmost child at each level */
+    HINT_RIGHTMOST  /* Traverse to rightmost child at each level */
+} TraversalHint;
 
 typedef struct {
     sds updated_anchor;    /* Pointer to updated anchor string if it's changed */
@@ -751,7 +751,7 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
     }
 }
 
-static insertResult subtreeInsert(node *n, sds string, InsertHint hint, size_t validated_len) {
+static insertResult subtreeInsert(node *n, sds string, TraversalHint hint, size_t validated_len) {
     assert(n);
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
@@ -820,7 +820,7 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     }
 
     /* Detect append/prepend patterns for optimized insert path */
-    InsertHint hint = HINT_NONE;
+    TraversalHint hint = HINT_NONE;
     leafNode *rightmost = fbt->rightmost_leaf;
     leafNode *leftmost = fbt->leftmost_leaf;
 
@@ -856,6 +856,16 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     return result.inserted_item;
 }
 
+/* Remove item from leaf without freeing it. Returns the removed item. */
+static sds leafNodeRemoveAt(leafNode *leaf, int delete_index) {
+    assert(delete_index >= 0 && delete_index < leaf->header.num_items);
+    sds item = leaf->values[delete_index];
+    leaf->header.num_items--;
+    memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1],
+            (leaf->header.num_items - delete_index) * sizeof(sds));
+    return item;
+}
+
 static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds item) {
     assert(leaf->header.num_items > 0);
 
@@ -876,12 +886,7 @@ static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds i
         if (leaf == fbt->rightmost_leaf) fbt->rightmost_leaf = leaf->prev;
     }
 
-    sdsfree(leaf->values[delete_index]);
-    leaf->header.num_items--;
-
-    /* Shift elements to fill the gap */
-    memmove(&leaf->values[delete_index], &leaf->values[delete_index + 1],
-            (leaf->header.num_items - delete_index) * sizeof(sds));
+    sdsfree(leafNodeRemoveAt(leaf, delete_index));
 
     deleteResult result = {
         .delete_executed = true,
@@ -935,24 +940,111 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
 
 /* Returns false if element was not found and deleted.
  * item must be the exact pointer returned from fbtreeInsert. */
-bool fbtreeDelete(fbtreeIndex *fbt, const_sds item) {
-    if (fbt->root == NULL) return false;
-
-    deleteResult result = subtreeDelete(fbt, fbt->root, item);
-    if (!result.delete_executed) return false;
-
+/* Helper to handle root cleanup after delete */
+static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
     if (getSubtreeSize(fbt->root) == 0) {
         zfree(fbt->root);
         fbt->root = NULL;
         fbt->leftmost_leaf = NULL;
         fbt->rightmost_leaf = NULL;
     } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
-        /* Root collapse: inner root with single child becomes that child */
         innerNode *old_root = (innerNode *)fbt->root;
         fbt->root = old_root->children[0];
         zfree(old_root);
     }
+}
+
+bool fbtreeDelete(fbtreeIndex *fbt, const_sds item) {
+    if (fbt->root == NULL) return false;
+
+    deleteResult result = subtreeDelete(fbt, fbt->root, item);
+    if (!result.delete_executed) return false;
+
+    fbtreePostDeleteCleanup(fbt);
     return true;
+}
+
+static deleteResult subtreePop(node *n, TraversalHint hint, bool free_item) {
+    assert(hint != HINT_NONE);
+    if (n->is_leaf) {
+        leafNode *leaf = (leafNode *)n;
+        int idx = (hint == HINT_LEFTMOST) ? 0 : leaf->header.num_items - 1;
+        sds item = leafNodeRemoveAt(leaf, idx);
+        if (free_item) sdsfree(item);
+        return (deleteResult){
+            .delete_executed = true,
+            .updated_anchor = (hint == HINT_RIGHTMOST) ? leafNodeHighKey(leaf) : NULL,
+            .node_underflowed = leaf->header.num_items < MIN_FILL};
+    }
+
+    innerNode *inner = (innerNode *)n;
+    int index = (hint == HINT_LEFTMOST) ? 0 : inner->header.num_items - 1;
+
+    deleteResult child_result = subtreePop(inner->children[index], hint, free_item);
+    if (!child_result.delete_executed) return child_result;
+
+    inner->child_sizes[index]--;
+
+    if (child_result.updated_anchor) {
+        inner->anchors[index] = child_result.updated_anchor;
+        for (int j = 0; j < FEATURE_SIZE; j++)
+            inner->features[j][index] = getFeatureByte(child_result.updated_anchor, inner->prefix_len, j);
+    }
+
+    /* Remove empty child */
+    if (inner->child_sizes[index] == 0) {
+        node *empty_child = inner->children[index];
+        if (empty_child->is_leaf) unlinkLeaf((leafNode *)empty_child);
+        zfree(empty_child);
+        innerNodeRemoveChild(inner, index);
+        sds new_anchor = (inner->header.num_items > 0 && index == inner->header.num_items)
+                             ? inner->anchors[inner->header.num_items - 1]
+                             : NULL;
+        return (deleteResult){
+            .updated_anchor = new_anchor,
+            .delete_executed = true,
+            .node_underflowed = inner->header.num_items < MIN_FILL};
+    }
+
+    deleteResult result = {
+        .updated_anchor = index == inner->header.num_items - 1 ? child_result.updated_anchor : NULL,
+        .delete_executed = true,
+        .node_underflowed = inner->header.num_items < MIN_FILL};
+    return result;
+}
+
+/* Pop and return the minimum element. Returns NULL if tree is empty.
+ * Caller is responsible for freeing the returned sds. */
+sds fbtreePopMin(fbtreeIndex *fbt) {
+    if (!fbt->root || !fbt->leftmost_leaf) return NULL;
+
+    leafNode *leaf = fbt->leftmost_leaf;
+    sds item = leaf->values[0];
+
+    /* Update cache before delete */
+    if (leaf->header.num_items == 1)
+        fbt->leftmost_leaf = leaf->next;
+
+    subtreePop(fbt->root, HINT_LEFTMOST, false);
+    fbtreePostDeleteCleanup(fbt);
+    return item;
+}
+
+/* Pop and return the maximum element. Returns NULL if tree is empty.
+ * Caller is responsible for freeing the returned sds. */
+sds fbtreePopMax(fbtreeIndex *fbt) {
+    if (!fbt->root || !fbt->rightmost_leaf) return NULL;
+
+    leafNode *leaf = fbt->rightmost_leaf;
+    sds item = leaf->values[leaf->header.num_items - 1];
+
+    /* Update cache before delete */
+    if (leaf->header.num_items == 1)
+        fbt->rightmost_leaf = leaf->prev;
+
+    subtreePop(fbt->root, HINT_RIGHTMOST, false);
+    fbtreePostDeleteCleanup(fbt);
+    return item;
 }
 
 /* Get element at given rank (0-indexed). Returns NULL if rank >= length */

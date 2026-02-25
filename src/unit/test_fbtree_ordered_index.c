@@ -2588,3 +2588,327 @@ int test_fbtree_long_prefix_realloc(int argc, char **argv, int flags) {
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
+/* ========== Pop Min/Max Tests ========== */
+
+int test_fbtree_pop_min_single(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    sds str = createString("only");
+    fbtreeInsert(fbt, str);
+    TEST_ASSERT(fbtreeLength(fbt) == 1);
+
+    sds popped = fbtreePopMin(fbt);
+    TEST_ASSERT(popped != NULL);
+    TEST_ASSERT(memcmp(popped, "only", 5) == 0);
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+    TEST_ASSERT(is_tree_valid(fbt));
+    sdsfree(popped);
+
+    /* Pop from empty returns NULL */
+    TEST_ASSERT(fbtreePopMin(fbt) == NULL);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_max_single(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    sds str = createString("only");
+    fbtreeInsert(fbt, str);
+    TEST_ASSERT(fbtreeLength(fbt) == 1);
+
+    sds popped = fbtreePopMax(fbt);
+    TEST_ASSERT(popped != NULL);
+    TEST_ASSERT(memcmp(popped, "only", 5) == 0);
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+    TEST_ASSERT(is_tree_valid(fbt));
+    sdsfree(popped);
+
+    /* Pop from empty returns NULL */
+    TEST_ASSERT(fbtreePopMax(fbt) == NULL);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_min_multiple(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Insert out of order */
+    const char *items[] = {"cherry", "apple", "banana", "date"};
+    for (int i = 0; i < 4; i++) {
+        fbtreeInsert(fbt, createString(items[i]));
+    }
+
+    /* Pop in sorted order: apple, banana, cherry, date */
+    sds popped = fbtreePopMin(fbt);
+    TEST_ASSERT(memcmp(popped, "apple", 6) == 0);
+    sdsfree(popped);
+    TEST_ASSERT(fbtreeLength(fbt) == 3);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    popped = fbtreePopMin(fbt);
+    TEST_ASSERT(memcmp(popped, "banana", 7) == 0);
+    sdsfree(popped);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    popped = fbtreePopMin(fbt);
+    TEST_ASSERT(memcmp(popped, "cherry", 7) == 0);
+    sdsfree(popped);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    popped = fbtreePopMin(fbt);
+    TEST_ASSERT(memcmp(popped, "date", 5) == 0);
+    sdsfree(popped);
+
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_max_multiple(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Insert out of order */
+    const char *items[] = {"cherry", "apple", "banana", "date"};
+    for (int i = 0; i < 4; i++) {
+        fbtreeInsert(fbt, createString(items[i]));
+    }
+
+    /* Pop in reverse sorted order: date, cherry, banana, apple */
+    sds popped = fbtreePopMax(fbt);
+    TEST_ASSERT(memcmp(popped, "date", 5) == 0);
+    sdsfree(popped);
+    TEST_ASSERT(fbtreeLength(fbt) == 3);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    popped = fbtreePopMax(fbt);
+    TEST_ASSERT(memcmp(popped, "cherry", 7) == 0);
+    sdsfree(popped);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    popped = fbtreePopMax(fbt);
+    TEST_ASSERT(memcmp(popped, "banana", 7) == 0);
+    sdsfree(popped);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    popped = fbtreePopMax(fbt);
+    TEST_ASSERT(memcmp(popped, "apple", 6) == 0);
+    sdsfree(popped);
+
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_min_multilevel(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Create multi-level tree */
+    char buf[16];
+    const int count = TEST_NODE_CAPACITY * 3;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    /* Pop all items - should come out in sorted order */
+    for (int i = 0; i < count; i++) {
+        sds popped = fbtreePopMin(fbt);
+        TEST_ASSERT(popped != NULL);
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        sdsfree(popped);
+        TEST_ASSERT(is_tree_valid(fbt));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_max_multilevel(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Create multi-level tree */
+    char buf[16];
+    const int count = TEST_NODE_CAPACITY * 3;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    /* Pop all items - should come out in reverse sorted order */
+    for (int i = count - 1; i >= 0; i--) {
+        sds popped = fbtreePopMax(fbt);
+        TEST_ASSERT(popped != NULL);
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        sdsfree(popped);
+        TEST_ASSERT(is_tree_valid(fbt));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_alternating(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    char buf[16];
+    const int count = 100;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+
+    /* Alternate between pop min and pop max */
+    int min_idx = 0, max_idx = count - 1;
+    for (int i = 0; i < count; i++) {
+        sds popped;
+        if (i % 2 == 0) {
+            popped = fbtreePopMin(fbt);
+            snprintf(buf, sizeof(buf), "key_%03d", min_idx++);
+        } else {
+            popped = fbtreePopMax(fbt);
+            snprintf(buf, sizeof(buf), "key_%03d", max_idx--);
+        }
+        TEST_ASSERT(popped != NULL);
+        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        sdsfree(popped);
+        TEST_ASSERT(is_tree_valid(fbt));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 0);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_empty(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* Pop from empty tree returns NULL */
+    TEST_ASSERT(fbtreePopMin(fbt) == NULL);
+    TEST_ASSERT(fbtreePopMax(fbt) == NULL);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
+
+int test_fbtree_pop_with_iteration_and_insert(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+    char buf[16];
+    sds popped;
+    const_sds pos;
+
+    /* Insert ascending (append path): k100-k199 */
+    for (int i = 100; i < 200; i++) {
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 100);
+
+    /* Pop min a few times */
+    for (int i = 100; i < 110; i++) {
+        popped = fbtreePopMin(fbt);
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        sdsfree(popped);
+        TEST_ASSERT(is_tree_valid(fbt));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 90);
+
+    /* Insert descending (prepend path): k099 down to k050 */
+    for (int i = 99; i >= 50; i--) {
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 140);
+
+    /* Pop max a few times */
+    for (int i = 199; i >= 190; i--) {
+        popped = fbtreePopMax(fbt);
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        sdsfree(popped);
+        TEST_ASSERT(is_tree_valid(fbt));
+    }
+    TEST_ASSERT(fbtreeLength(fbt) == 130);
+
+    /* Iterate forward and verify sorted order: k050-k189 */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    for (int i = 50; i < 190; i++) {
+        if (i >= 100 && i < 110) continue; /* popped */
+        TEST_ASSERT(fbtreeNext(&it, &pos));
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+    }
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    /* Iterate backward */
+    fbtreeInitIterator(&it, fbt);
+    for (int i = 189; i >= 50; i--) {
+        if (i >= 100 && i < 110) continue;
+        TEST_ASSERT(fbtreePrev(&it, &pos));
+        snprintf(buf, sizeof(buf), "k%03d", i);
+        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+    }
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    return 0;
+}
