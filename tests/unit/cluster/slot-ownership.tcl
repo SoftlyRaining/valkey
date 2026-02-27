@@ -1,4 +1,4 @@
-start_cluster 2 2 {tags {external:skip cluster}} {
+start_cluster 2 2 {tags {external:skip cluster qemu:skip}} {
 
     test "Verify that slot ownership transfer through gossip propagates deletes to replicas" {
         assert {[s -2 role] eq {slave}}
@@ -60,7 +60,7 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}} {
+start_cluster 3 1 {tags {external:skip cluster qemu:skip} overrides {shutdown-timeout 100}} {
     test "Primary lost a slot during the shutdown waiting" {
         R 0 set FOO 0
 
@@ -98,7 +98,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster qemu:skip}} {
     test "Primary lost a slot during the manual failover pausing" {
         R 0 set FOO 0
 
@@ -125,7 +125,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
+start_cluster 3 1 {tags {external:skip cluster qemu:skip}} {
     test "Primary lost a slot during the client pause command" {
         R 0 set FOO 0
 
