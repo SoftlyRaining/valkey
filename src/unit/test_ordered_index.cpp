@@ -1,14 +1,30 @@
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
-#include "test_help.h"
-#include "../server.h"
-#include "../ordered_index.h"
-#include "../fbtree_ordered_index.h"
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include "generated_wrappers.hpp"
+
+#include <cstdio>
+#include <cstring>
+#include <cmath>
+
+extern "C" {
+/* Rename 'delete' to avoid C++ keyword conflict */
+#define delete delete_
+#include "server.h"
+#include "ordered_index.h"
+#include "fbtree_ordered_index.h"
+#undef delete
+}
+
+#define TEST_ASSERT(x) ASSERT_TRUE(x)
+#define TEST_ASSERT_SCORE_EQ(a, b) ASSERT_DOUBLE_EQ(a, b)
 
 /* Generic tests that work with any OrderedIndex implementation */
 
-static int test_create_free_generic(const OrderedIndexOps *ops) {
+static void test_create_free_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     TEST_ASSERT(idx != NULL);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
@@ -20,17 +36,17 @@ static int test_create_free_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_insert_single_generic(const OrderedIndexOps *ops) {
+static void test_insert_single_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     sds ele = sdsnew("test");
     OrderedIndexItem *node = orderedIndexInsert(ops, idx, 1.0, ele);
 
     TEST_ASSERT(node != NULL);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 1);
-    TEST_ASSERT(orderedIndexGetScore(ops, node) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, node), 1.0);
 
     const char *ptr;
     size_t len;
@@ -47,10 +63,10 @@ static int test_insert_single_generic(const OrderedIndexOps *ops) {
 
     sdsfree(ele);
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
+static void test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     for (int i = 0; i < 10; i++) {
@@ -69,7 +85,7 @@ static int test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 0; i < 10; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == (double)i);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)i);
     }
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
@@ -78,16 +94,16 @@ static int test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 9; i >= 0; i--) {
         TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == (double)i);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)i);
     }
     TEST_ASSERT(!orderedIndexPrev(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_duplicate_scores_generic(const OrderedIndexOps *ops) {
+static void test_duplicate_scores_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements with same score but different keys */
@@ -107,7 +123,7 @@ static int test_duplicate_scores_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 0; i < 5; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
         const char *ptr;
         size_t len;
         orderedIndexGetElementRaw(ops, pos, &ptr, &len);
@@ -118,10 +134,10 @@ static int test_duplicate_scores_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_rank_operations_generic(const OrderedIndexOps *ops) {
+static void test_rank_operations_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     OrderedIndexItem *nodes[10];
 
@@ -147,10 +163,10 @@ static int test_rank_operations_generic(const OrderedIndexOps *ops) {
     }
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_delete_generic(const OrderedIndexOps *ops) {
+static void test_delete_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     OrderedIndexItem *nodes[5];
 
@@ -174,20 +190,20 @@ static int test_delete_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 0.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 0.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 3.0); /* Skipped 2.0 */
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 3.0); /* Skipped 2.0 */
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_pop_first_generic(const OrderedIndexOps *ops) {
+static void test_pop_first_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Pop from empty - should return NULL */
@@ -206,7 +222,7 @@ static int test_pop_first_generic(const OrderedIndexOps *ops) {
     /* Pop first - should get score 0.0 */
     OrderedIndexItem *item = orderedIndexPopFirst(ops, idx);
     TEST_ASSERT(item != NULL);
-    TEST_ASSERT(orderedIndexGetScore(ops, item) == 0.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, item), 0.0);
     const char *ptr;
     size_t len;
     orderedIndexGetElementRaw(ops, item, &ptr, &len);
@@ -216,15 +232,15 @@ static int test_pop_first_generic(const OrderedIndexOps *ops) {
 
     /* Pop again - should get score 1.0 */
     item = orderedIndexPopFirst(ops, idx);
-    TEST_ASSERT(orderedIndexGetScore(ops, item) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, item), 1.0);
     orderedIndexFreeItem(ops, item);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_pop_last_generic(const OrderedIndexOps *ops) {
+static void test_pop_last_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Pop from empty - should return NULL */
@@ -243,7 +259,7 @@ static int test_pop_last_generic(const OrderedIndexOps *ops) {
     /* Pop last - should get score 4.0 */
     OrderedIndexItem *item = orderedIndexPopLast(ops, idx);
     TEST_ASSERT(item != NULL);
-    TEST_ASSERT(orderedIndexGetScore(ops, item) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, item), 4.0);
     const char *ptr;
     size_t len;
     orderedIndexGetElementRaw(ops, item, &ptr, &len);
@@ -253,15 +269,15 @@ static int test_pop_last_generic(const OrderedIndexOps *ops) {
 
     /* Pop again - should get score 3.0 */
     item = orderedIndexPopLast(ops, idx);
-    TEST_ASSERT(orderedIndexGetScore(ops, item) == 3.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, item), 3.0);
     orderedIndexFreeItem(ops, item);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_update_score_generic(const OrderedIndexOps *ops) {
+static void test_update_score_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements */
@@ -278,7 +294,7 @@ static int test_update_score_generic(const OrderedIndexOps *ops) {
     /* Update middle element to move it to end */
     OrderedIndexItem *updated = orderedIndexUpdateScore(ops, idx, node2, 4.0);
     TEST_ASSERT(updated != NULL);
-    TEST_ASSERT(orderedIndexGetScore(ops, updated) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 4.0);
     const char *ptr;
     size_t len;
     orderedIndexGetElementRaw(ops, updated, &ptr, &len);
@@ -289,24 +305,24 @@ static int test_update_score_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 3.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 3.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     orderedIndexGetElementRaw(ops, pos, &ptr, &len);
     TEST_ASSERT(len == 4 && memcmp(ptr, "key2", 4) == 0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Update to same score (no-op) */
     updated = orderedIndexUpdateScore(ops, idx, node1, 1.0);
-    TEST_ASSERT(orderedIndexGetScore(ops, updated) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 1.0);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
+static void test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert 10 elements with scores 0-9 */
@@ -329,11 +345,11 @@ static int test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     for (int i = 0; i < 3; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == (double)i);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)i);
     }
     for (int i = 7; i < 10; i++) {
         TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == (double)i);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)i);
     }
     orderedIndexResetIterator(ops, &iter);
 
@@ -343,10 +359,10 @@ static int test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 5);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
+static void test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert 10 elements */
@@ -368,18 +384,18 @@ static int test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 0.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 0.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Verify rank 3 is now score 5 (was rank 6) */
     OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, 3);
-    TEST_ASSERT(orderedIndexGetScore(ops, node) == 5.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, node), 5.0);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *ops) {
+static void test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     OrderedIndexItem *nodes[100];
 
@@ -415,10 +431,10 @@ static int test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *o
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_backward_traversal_after_deletions_generic(const OrderedIndexOps *ops) {
+static void test_backward_traversal_after_deletions_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     OrderedIndexItem *nodes[20];
 
@@ -444,17 +460,17 @@ static int test_backward_traversal_after_deletions_generic(const OrderedIndexOps
     int idx_score = 0;
 
     while (orderedIndexPrev(ops, &iter, &pos)) {
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == (double)expected_scores[idx_score]);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)expected_scores[idx_score]);
         idx_score++;
     }
     TEST_ASSERT(idx_score == 17); /* Should have traversed all 17 remaining elements */
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_lexicographic_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_lexicographic_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Test empty string */
@@ -512,10 +528,10 @@ static int test_lexicographic_edge_cases_generic(const OrderedIndexOps *ops) {
     sdsfree(long_str);
     sdsfree(short_str);
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_range_boundary_precision_generic(const OrderedIndexOps *ops) {
+static void test_range_boundary_precision_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements with very close scores */
@@ -540,19 +556,19 @@ static int test_range_boundary_precision_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == base);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), base);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == base + 2 * epsilon);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), base + 2 * epsilon);
     orderedIndexResetIterator(ops, &iter);
 
     sdsfree(ele1);
     sdsfree(ele2);
     sdsfree(ele3);
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_special_double_values_generic(const OrderedIndexOps *ops) {
+static void test_special_double_values_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
     const char *ptr;
     size_t len;
@@ -573,13 +589,13 @@ static int test_special_double_values_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == -INFINITY);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), -INFINITY);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 0.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 0.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == INFINITY);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), INFINITY);
     orderedIndexResetIterator(ops, &iter);
 
     sdsfree(neg_inf);
@@ -624,18 +640,18 @@ static int test_special_double_values_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 2);
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == denorm);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), denorm);
     TEST_ASSERT(orderedIndexGetScore(ops, pos) < 1.0);
     orderedIndexResetIterator(ops, &iter);
 
     sdsfree(denorm_ele);
     sdsfree(normal_ele);
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
 
-static int test_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Empty index operations */
@@ -649,10 +665,10 @@ static int test_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexGetByRank(ops, idx, 1) == NULL);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Delete only element */
@@ -680,7 +696,7 @@ static int test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 2);
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Delete last element */
@@ -688,14 +704,14 @@ static int test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 1);
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_rank_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_rank_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert 5 elements */
@@ -719,10 +735,10 @@ static int test_rank_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexGetByRank(ops, idx, 5) != NULL);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_duplicate_insert_generic(const OrderedIndexOps *ops) {
+static void test_duplicate_insert_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert same score+element twice */
@@ -738,10 +754,10 @@ static int test_duplicate_insert_generic(const OrderedIndexOps *ops) {
     sdsfree(ele1);
     sdsfree(ele2);
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements */
@@ -756,7 +772,7 @@ static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     /* Update first element to move backward (should stay first) */
     OrderedIndexItem *first = orderedIndexGetByRank(ops, idx, 1);
     OrderedIndexItem *updated = orderedIndexUpdateScore(ops, idx, first, -1.0);
-    TEST_ASSERT(orderedIndexGetScore(ops, updated) == -1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), -1.0);
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
@@ -768,7 +784,7 @@ static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     unsigned long len = orderedIndexLength(ops, idx);
     OrderedIndexItem *last = orderedIndexGetByRank(ops, idx, len);
     updated = orderedIndexUpdateScore(ops, idx, last, 10.0);
-    TEST_ASSERT(orderedIndexGetScore(ops, updated) == 10.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 10.0);
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
     TEST_ASSERT(pos == updated);
@@ -778,14 +794,14 @@ static int test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *middle = orderedIndexGetByRank(ops, idx, 3);
     double old_score = orderedIndexGetScore(ops, middle);
     updated = orderedIndexUpdateScore(ops, idx, middle, 0.5);
-    TEST_ASSERT(orderedIndexGetScore(ops, updated) == 0.5);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 0.5);
     TEST_ASSERT(orderedIndexGetScore(ops, updated) < old_score);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert 10 elements */
@@ -814,7 +830,7 @@ static int test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 2.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 2.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Delete last elements by rank */
@@ -823,7 +839,7 @@ static int test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(deleted == 2);
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 7.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 7.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Delete entire remaining index by score */
@@ -832,11 +848,11 @@ static int test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
 
-static int test_traversal_edge_cases_generic(const OrderedIndexOps *ops) {
+static void test_traversal_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert single element */
@@ -848,23 +864,23 @@ static int test_traversal_edge_cases_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
 
     /* Same for prev */
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(!orderedIndexPrev(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
 
     sdsfree(ele);
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_seek_to_rank_generic(const OrderedIndexOps *ops) {
+static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert 5 elements */
@@ -883,7 +899,7 @@ static int test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexInitIterator(ops, &iter, idx);
@@ -895,26 +911,26 @@ static int test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 1);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 2.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 2.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 1);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Seek to rank 3 (middle) - next should return rank 4, prev should return rank 3 */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 3);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 3);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 3.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 3.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Seek to rank 5 (last) - next should return NULL, prev should return rank 5 */
@@ -926,14 +942,14 @@ static int test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 5);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 5.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 5.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_reverse_iteration_generic(const OrderedIndexOps *ops) {
+static void test_reverse_iteration_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert 5 elements */
@@ -953,7 +969,7 @@ static int test_reverse_iteration_generic(const OrderedIndexOps *ops) {
     int count = 0;
     double expected = 5.0;
     while (orderedIndexPrev(ops, &iter, &pos)) {
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), expected);
         expected -= 1.0;
         count++;
     }
@@ -963,24 +979,24 @@ static int test_reverse_iteration_generic(const OrderedIndexOps *ops) {
     /* Reverse then forward */
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 5.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 5.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 5.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 5.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Forward then reverse */
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 1.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
+static void test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements with scores 0,2,4,6,8 */
@@ -999,28 +1015,28 @@ static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 2.0, 6.0, 0, 0, 0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 2.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 2.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Seek to second in range [2, 6] with offset 1 */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 2.0, 6.0, 0, 0, 1);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Seek to last in range [2, 6] with offset -1 */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 2.0, 6.0, 0, 0, -1);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 6.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 6.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Seek with exclusive bounds (2, 6) - should start at 4 */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 2.0, 6.0, 1, 1, 0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Seek to empty range - should position at end */
@@ -1045,7 +1061,7 @@ static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 2.0, 6.0, 0, 0, -2);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     orderedIndexResetIterator(ops, &iter);
 
     /* Empty range where min > max - should position at end */
@@ -1055,10 +1071,10 @@ static int test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops) {
+static void test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements with scores 0-9 */
@@ -1079,7 +1095,7 @@ static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops
     int count = 0;
     double expected = 3.0;
     while (orderedIndexNext(ops, &iter, &pos) && orderedIndexGetScore(ops, pos) <= 7.0) {
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), expected);
         expected += 1.0;
         count++;
     }
@@ -1090,12 +1106,12 @@ static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 3.0, 7.0, 0, 0, -1);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 7.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 7.0);
     /* Now go backward */
     count = 0;
     expected = 7.0;
     while (orderedIndexPrev(ops, &iter, &pos) && orderedIndexGetScore(ops, pos) >= 3.0) {
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), expected);
         expected -= 1.0;
         count++;
     }
@@ -1106,18 +1122,18 @@ static int test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToScoreRange(ops, &iter, 2.0, 8.0, 0, 0, 2); /* Start at 4 (3rd element) */
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 4.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 4.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT(orderedIndexGetScore(ops, pos) == 5.0);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 5.0);
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
 /* Test ZREVRANGEBYSCORE +inf behavior: seek to last element and iterate backwards.
  * This is the pattern used by ZREVRANGEBYSCORE -inf +inf to get all elements in reverse. */
-static int test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) {
+static void test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements with scores 1-5 */
@@ -1140,7 +1156,7 @@ static int test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) {
     double expected = 5.0;
     while (orderedIndexNext(ops, &iter, &pos)) {
         if (count == 0) {
-            TEST_ASSERT(orderedIndexGetScore(ops, pos) == 5.0);
+            TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 5.0);
         }
         count++;
         break; /* Just verify first element is correct */
@@ -1149,7 +1165,7 @@ static int test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) {
     count = 0;
     expected = 5.0;
     while (orderedIndexPrev(ops, &iter, &pos)) {
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), expected);
         expected -= 1.0;
         count++;
     }
@@ -1157,12 +1173,12 @@ static int test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
 /* Test ZRANGEBYSCORE -inf behavior: seek to first element and iterate forwards.
  * This is the pattern used by ZRANGEBYSCORE -inf +inf to get all elements. */
-static int test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) {
+static void test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) {
     OrderedIndex *idx = orderedIndexCreate(ops);
 
     /* Insert elements with scores 1-5 */
@@ -1184,7 +1200,7 @@ static int test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) {
     int count = 0;
     double expected = 1.0;
     while (orderedIndexNext(ops, &iter, &pos)) {
-        TEST_ASSERT(orderedIndexGetScore(ops, pos) == expected);
+        TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), expected);
         expected += 1.0;
         count++;
     }
@@ -1192,77 +1208,70 @@ static int test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-    return 0;
+
 }
 
-/* ========== Test Wrappers ========== */
-/* The test generator script requires function definitions with '{' on the same line */
+/* ========== Skiplist Tests ========== */
 
-#define WRAP(impl, test) \
-    int test_ordered_index_##impl##_##test(int argc, char **argv, int flags) { \
-        UNUSED(argc); UNUSED(argv); UNUSED(flags); \
-        return test_##test##_generic(&impl##OrderedIndexOps); \
-    }
+class SkiplistOrderedIndexTest : public ::testing::Test {};
 
-/* Skiplist wrappers */
-int test_ordered_index_skiplist_create_free(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_create_free_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_insert_single(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_single_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_insert_multiple_ordered(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_multiple_ordered_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_duplicate_scores(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_scores_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_rank_operations(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_operations_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_delete(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_pop_first(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_first_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_pop_last(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_last_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_update_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_delete_range_by_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_range_by_score_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_delete_range_by_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_range_by_rank_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_rank_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_duplicate_insert(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_insert_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_update_score_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_range_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_range_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_traversal_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_traversal_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_mixed_operations_rank_integrity(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_mixed_operations_rank_integrity_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_backward_traversal_after_deletions(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_backward_traversal_after_deletions_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_lexicographic_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_lexicographic_edge_cases_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_range_boundary_precision(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_range_boundary_precision_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_special_double_values(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_special_double_values_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_seek_to_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_rank_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_reverse_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_reverse_iteration_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_seek_to_score_range(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_score_range_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_seek_to_score_range_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_score_range_iteration_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_seek_inf_reverse_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_inf_reverse_iteration_generic(&skiplistOrderedIndexOps); }
-int test_ordered_index_skiplist_seek_inf_forward_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_inf_forward_iteration_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, CreateFree) { test_create_free_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, InsertSingle) { test_insert_single_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, InsertMultipleOrdered) { test_insert_multiple_ordered_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, DuplicateScores) { test_duplicate_scores_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, RankOperations) { test_rank_operations_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, Delete) { test_delete_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, PopFirst) { test_pop_first_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, PopLast) { test_pop_last_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, UpdateScore) { test_update_score_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByScore) { test_delete_range_by_score_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByRank) { test_delete_range_by_rank_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, EdgeCases) { test_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, DeleteEdgeCases) { test_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, RankEdgeCases) { test_rank_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, DuplicateInsert) { test_duplicate_insert_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, UpdateScoreEdgeCases) { test_update_score_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, RangeDeleteEdgeCases) { test_range_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, TraversalEdgeCases) { test_traversal_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, MixedOperationsRankIntegrity) { test_mixed_operations_rank_integrity_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, BackwardTraversalAfterDeletions) { test_backward_traversal_after_deletions_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, LexicographicEdgeCases) { test_lexicographic_edge_cases_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, RangeBoundaryPrecision) { test_range_boundary_precision_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, SpecialDoubleValues) { test_special_double_values_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, SeekToRank) { test_seek_to_rank_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, ReverseIteration) { test_reverse_iteration_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, SeekToScoreRange) { test_seek_to_score_range_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, SeekToScoreRangeIteration) { test_seek_to_score_range_iteration_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, SeekInfReverseIteration) { test_seek_inf_reverse_iteration_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, SeekInfForwardIteration) { test_seek_inf_forward_iteration_generic(&skiplistOrderedIndexOps); }
 
-/* Fbtree wrappers */
-int test_ordered_index_fbtree_create_free(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_create_free_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_insert_single(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_single_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_insert_multiple_ordered(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_insert_multiple_ordered_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_duplicate_scores(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_scores_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_rank_operations(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_operations_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_delete(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_pop_first(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_first_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_pop_last(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_pop_last_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_update_score(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_edge_cases_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_delete_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_delete_edge_cases_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_rank_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_rank_edge_cases_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_duplicate_insert(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_duplicate_insert_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_update_score_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_update_score_edge_cases_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_traversal_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_traversal_edge_cases_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_mixed_operations_rank_integrity(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_mixed_operations_rank_integrity_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_backward_traversal_after_deletions(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_backward_traversal_after_deletions_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_lexicographic_edge_cases(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_lexicographic_edge_cases_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_special_double_values(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_special_double_values_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_seek_to_rank(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_seek_to_rank_generic(&fbtreeOrderedIndexOps); }
-int test_ordered_index_fbtree_reverse_iteration(int argc, char **argv, int flags) { UNUSED(argc); UNUSED(argv); UNUSED(flags); return test_reverse_iteration_generic(&fbtreeOrderedIndexOps); }
+/* ========== Fbtree Tests ========== */
 
-/* NOTE: These tests require delete_range_by_score/rank which are not yet implemented:
- * - test_ordered_index_fbtree_delete_range_by_score
- * - test_ordered_index_fbtree_delete_range_by_rank
- * - test_ordered_index_fbtree_range_delete_edge_cases
- * - test_ordered_index_fbtree_range_boundary_precision
- * - test_ordered_index_fbtree_seek_to_score_range
- * - test_ordered_index_fbtree_seek_to_score_range_iteration
+class FbtreeOrderedIndexTest : public ::testing::Test {};
+
+TEST_F(FbtreeOrderedIndexTest, CreateFree) { test_create_free_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, InsertSingle) { test_insert_single_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, InsertMultipleOrdered) { test_insert_multiple_ordered_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, DuplicateScores) { test_duplicate_scores_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, RankOperations) { test_rank_operations_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, Delete) { test_delete_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, PopFirst) { test_pop_first_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, PopLast) { test_pop_last_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, UpdateScore) { test_update_score_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, EdgeCases) { test_edge_cases_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, DeleteEdgeCases) { test_delete_edge_cases_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, RankEdgeCases) { test_rank_edge_cases_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, DuplicateInsert) { test_duplicate_insert_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, UpdateScoreEdgeCases) { test_update_score_edge_cases_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, TraversalEdgeCases) { test_traversal_edge_cases_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, MixedOperationsRankIntegrity) { test_mixed_operations_rank_integrity_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, BackwardTraversalAfterDeletions) { test_backward_traversal_after_deletions_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, LexicographicEdgeCases) { test_lexicographic_edge_cases_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, SpecialDoubleValues) { test_special_double_values_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, SeekToRank) { test_seek_to_rank_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, ReverseIteration) { test_reverse_iteration_generic(&fbtreeOrderedIndexOps); }
+
+/* NOTE: These tests require delete_range_by_score/rank which are not yet implemented for fbtree:
+ * - DeleteRangeByScore, DeleteRangeByRank, RangeDeleteEdgeCases, RangeBoundaryPrecision
+ * - SeekToScoreRange, SeekToScoreRangeIteration
  */
