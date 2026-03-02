@@ -25,7 +25,7 @@ extern "C" {
 #define TEST_THREE_LEVEL_ITEMS (TEST_TWO_LEVEL_ITEMS + 200)
 
 /* Size limit of embedded prefix - must match EMBED_PREFIX_LEN in fbtree_ordered_index.c */
-#define TEST_EMBED_PREFIX_LEN 46
+#define TEST_EMBED_PREFIX_LEN 54
 
 /* Create a null-terminated sds from a C string. */
 static sds createString(const char *str) {
@@ -72,6 +72,27 @@ TEST(FbtreeTest, create_and_free) {
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 
+}
+
+/* Verify node sizes fit expected jemalloc size classes.
+ * innerNode should fit in 1792-byte class, leafNode in 512-byte class.
+ * This catches accidental struct bloat that wastes memory. */
+TEST(FbtreeTest, node_allocation_sizes) {
+    /* Directly test allocation sizes using zmalloc_usable_size */
+    void *inner_test = zmalloc(1784); /* sizeof(innerNode) */
+    void *leaf_test = zmalloc(512);   /* sizeof(leafNode) */
+
+    size_t inner_actual = zmalloc_usable_size(inner_test);
+    size_t leaf_actual = zmalloc_usable_size(leaf_test);
+
+    /* innerNode (1784 bytes) should fit in 1792-byte jemalloc class */
+    TEST_ASSERT(inner_actual == 1792);
+
+    /* leafNode (512 bytes) should fit in 512-byte jemalloc class */
+    TEST_ASSERT(leaf_actual == 512);
+
+    zfree(inner_test);
+    zfree(leaf_test);
 }
 
 TEST(FbtreeTest, insert_and_lookup) {

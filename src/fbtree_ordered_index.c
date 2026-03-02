@@ -25,7 +25,7 @@
 #define NODE_SIZE 61
 #define MIN_FILL (NODE_SIZE / 4) /* Minimum items before node underflows */
 #define FEATURE_SIZE 4
-#define EMBED_PREFIX_LEN 46
+#define EMBED_PREFIX_LEN 54 /* Tuned to fit innerNode in 1792-byte jemalloc size class */
 #define FEATURE_ROW_SIZE 64 /* size of cache line */
 
 /* Common header for all node types */
@@ -41,9 +41,9 @@ typedef struct {
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     sds anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
     node *children[NODE_SIZE];
-    uint32_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
+    uint64_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
 } innerNode;
-static_assert(sizeof(innerNode) == 1536, "should fit perfectly in jemalloc size class");
+static_assert(sizeof(innerNode) == 1784, "should fit in 1792-byte jemalloc size class");
 static_assert(NODE_SIZE <= FEATURE_ROW_SIZE, "NODE_SIZE must fit in feature row");
 
 typedef struct leafNode {
@@ -1315,7 +1315,7 @@ void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iter
 
 typedef struct {
     bool valid;
-    uint32_t size;
+    uint64_t size;
     leafNode *leftmost_leaf;
     leafNode *rightmost_leaf;
 } validateResult;
@@ -1339,11 +1339,11 @@ static void printIndent(int depth) {
 static validateResult validateNode(node *n, int depth, size_t parent_prefix_len, bool verbose);
 
 static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
-    uint32_t count = leaf->header.num_items;
+    uint64_t count = leaf->header.num_items;
     bool valid = (count <= NODE_SIZE);
 
     if (verbose) {
-        printf(" Leaf (%u items)\n", count);
+        printf(" Leaf (%lu items)\n", count);
         if (!valid) printf(" \033[31m[bad high_key]\033[0m");
         printf("\n");
 
@@ -1394,7 +1394,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         /* Recursively validate child and get its size */
         if (verbose) {
             printIndent(depth);
-            printf("\u251c\u2500[%02d] size=%u anchor=", i, inner->child_sizes[i]);
+            printf("\u251c\u2500[%02d] size=%lu anchor=", i, inner->child_sizes[i]);
             printBinaryString(anchor);
         }
 
@@ -1416,7 +1416,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
             if (!prefix_ok) printf("prefix ");
             if (!anchor_ok) printf("anchor ");
             if (!feature_ok) printf("feature ");
-            if (!size_ok) printf("size(%u!=%u) ", inner->child_sizes[i], child_result.size);
+            if (!size_ok) printf("size(%lu!=%lu) ", inner->child_sizes[i], child_result.size);
             printf("FAIL\033[0m\n");
         }
     }
@@ -1450,7 +1450,7 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
     /* Also verify total size matches computed length */
     bool length_ok = (result.size == length);
     if (!length_ok && verbose) {
-        printf("\033[31mERROR: tree size %u != computed length %lu\033[0m\n", result.size, length);
+        printf("\033[31mERROR: tree size %lu != computed length %lu\033[0m\n", result.size, length);
     }
 
     /* Verify leaf caches point to actual leftmost/rightmost leaves */
