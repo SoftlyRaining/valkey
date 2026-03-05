@@ -11,8 +11,8 @@
 
 extern "C" {
 #include "fbtree_ordered_index.h"
-#include "zmalloc.h"
 #include "sds.h"
+#include "zmalloc.h"
 }
 
 #define TEST_ASSERT(x) ASSERT_TRUE(x)
@@ -71,7 +71,6 @@ TEST(FbtreeTest, create_and_free) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* Verify node sizes fit expected jemalloc size classes.
@@ -111,11 +110,9 @@ TEST(FbtreeTest, insert_and_lookup) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, insert_multiple) {
-
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
 
@@ -139,7 +136,6 @@ TEST(FbtreeTest, insert_multiple) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, lookup_empty_tree) {
@@ -153,7 +149,6 @@ TEST(FbtreeTest, lookup_empty_tree) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, length_increments) {
@@ -177,7 +172,6 @@ TEST(FbtreeTest, length_increments) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Forward Iterator Tests ========== */
@@ -204,7 +198,6 @@ TEST(FbtreeTest, iterator_small) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, iterator_full_leaf) {
@@ -235,7 +228,6 @@ TEST(FbtreeTest, iterator_full_leaf) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, iterator_reverse_insert) {
@@ -266,7 +258,6 @@ TEST(FbtreeTest, iterator_reverse_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, iterator_empty) {
@@ -282,7 +273,6 @@ TEST(FbtreeTest, iterator_empty) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, iterator_reset_invalidates) {
@@ -307,7 +297,6 @@ TEST(FbtreeTest, iterator_reset_invalidates) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Duplicate and Edge Case Tests ========== */
@@ -331,7 +320,6 @@ TEST(FbtreeTest, duplicate_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, empty_string) {
@@ -346,7 +334,6 @@ TEST(FbtreeTest, empty_string) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, long_strings) {
@@ -365,7 +352,6 @@ TEST(FbtreeTest, long_strings) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Ordering Tests ========== */
@@ -402,7 +388,6 @@ TEST(FbtreeTest, multilevel_reverse_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, prefix_ordering) {
@@ -427,7 +412,6 @@ TEST(FbtreeTest, prefix_ordering) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, same_length_ordering) {
@@ -452,7 +436,6 @@ TEST(FbtreeTest, same_length_ordering) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, common_prefix_ordering) {
@@ -486,7 +469,6 @@ TEST(FbtreeTest, common_prefix_ordering) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, insert_batches_sorted) {
@@ -525,7 +507,6 @@ TEST(FbtreeTest, insert_batches_sorted) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, insert_at_boundaries) {
@@ -553,7 +534,6 @@ TEST(FbtreeTest, insert_at_boundaries) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Backward Iterator (Prev) Tests ========== */
@@ -581,7 +561,6 @@ TEST(FbtreeTest, prev_small) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, prev_full_leaf) {
@@ -610,7 +589,6 @@ TEST(FbtreeTest, prev_full_leaf) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, prev_empty) {
@@ -625,7 +603,6 @@ TEST(FbtreeTest, prev_empty) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, prev_next_mixed) {
@@ -658,7 +635,6 @@ TEST(FbtreeTest, prev_next_mixed) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, prev_single) {
@@ -677,7 +653,6 @@ TEST(FbtreeTest, prev_single) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, iterator_exhausted_stays_invalid) {
@@ -730,7 +705,6 @@ TEST(FbtreeTest, iterator_exhausted_stays_invalid) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Multi-Level Tree Tests ========== */
@@ -763,7 +737,6 @@ TEST(FbtreeTest, multilevel_lookup) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, multilevel_forward_iteration) {
@@ -793,7 +766,6 @@ TEST(FbtreeTest, multilevel_forward_iteration) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, multilevel_backward_iteration) {
@@ -823,7 +795,6 @@ TEST(FbtreeTest, multilevel_backward_iteration) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, multilevel_mixed_iteration) {
@@ -869,7 +840,6 @@ TEST(FbtreeTest, multilevel_mixed_iteration) {
     fbtreeResetIterator(&it);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, multilevel_cross_leaf_iteration) {
@@ -904,7 +874,6 @@ TEST(FbtreeTest, multilevel_cross_leaf_iteration) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Inner Node Split Tests (3+ Level Trees) ========== */
@@ -914,7 +883,7 @@ TEST(FbtreeTest, inner_split_sequential) {
     fbtreeIndex *fbt = fbtreeCreate();
 
     /* Insert enough items to force inner node splits and create 3+ level tree */
-    /* Sequential pattern stresses append pattern insertion shortcut and asymetric node splits */
+    /* Sequential pattern stresses append pattern insertion shortcut and asymmetric node splits */
     const int count = TEST_THREE_LEVEL_ITEMS;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
@@ -944,14 +913,13 @@ TEST(FbtreeTest, inner_split_sequential) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, inner_split_reverse) {
     size_t used_memory_before = zmalloc_used_memory();
     fbtreeIndex *fbt = fbtreeCreate();
 
-    /* Reverse insertion stresses prepend pattern insertion shortcut and asymetric node splits */
+    /* Reverse insertion stresses prepend pattern insertion shortcut and asymmetric node splits */
     const int count = TEST_THREE_LEVEL_ITEMS;
     char buf[16];
     for (int i = count - 1; i >= 0; i--) {
@@ -984,7 +952,6 @@ TEST(FbtreeTest, inner_split_reverse) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, inner_split_shuffled) {
@@ -992,7 +959,7 @@ TEST(FbtreeTest, inner_split_shuffled) {
     fbtreeIndex *fbt = fbtreeCreate();
 
     /* Shuffle indices for random insertion */
-    /* Random insertion stresses normal mid-collection insertion path and symetric 50/50 node splits */
+    /* Random insertion stresses normal mid-collection insertion path and symmetric 50/50 node splits */
     int *indices = (int *)zmalloc(5000 * sizeof(int));
     for (int i = 0; i < 5000; i++) {
         indices[i] = i;
@@ -1028,7 +995,6 @@ TEST(FbtreeTest, inner_split_shuffled) {
     zfree(indices);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Deep Tree Tests (4+ Levels) ========== */
@@ -1084,7 +1050,6 @@ TEST(FbtreeTest, deep_tree_4_levels) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 TEST(FbtreeTest, deep_tree_mixed_insert_patterns) {
     size_t used_memory_before = zmalloc_used_memory();
@@ -1154,7 +1119,6 @@ TEST(FbtreeTest, deep_tree_mixed_insert_patterns) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== String Pattern Tests ========== */
@@ -1218,7 +1182,6 @@ TEST(FbtreeTest, varied_string_patterns) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Split Boundary Tests ========== */
@@ -1268,7 +1231,6 @@ TEST(FbtreeTest, split_at_exact_boundary) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, alternating_min_max_insert) {
@@ -1324,7 +1286,6 @@ TEST(FbtreeTest, alternating_min_max_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* Sequential insertion into middle of tree can still trigger optimized append/prepend paths
@@ -1375,7 +1336,6 @@ TEST(FbtreeTest, sequential_middle_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Delete Tests ========== */
@@ -1394,7 +1354,6 @@ TEST(FbtreeTest, delete_single_item) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_nonexistent) {
@@ -1412,7 +1371,6 @@ TEST(FbtreeTest, delete_nonexistent) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_from_empty) {
@@ -1425,7 +1383,6 @@ TEST(FbtreeTest, delete_from_empty) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_all_items) {
@@ -1458,7 +1415,6 @@ TEST(FbtreeTest, delete_all_items) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_middle_item) {
@@ -1490,7 +1446,6 @@ TEST(FbtreeTest, delete_middle_item) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_max_updates_anchor) {
@@ -1522,7 +1477,6 @@ TEST(FbtreeTest, delete_max_updates_anchor) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_all_multilevel) {
@@ -1551,7 +1505,6 @@ TEST(FbtreeTest, delete_all_multilevel) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_root_collapse) {
@@ -1587,7 +1540,6 @@ TEST(FbtreeTest, delete_root_collapse) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_leftmost_leaf_updates_cache) {
@@ -1621,7 +1573,6 @@ TEST(FbtreeTest, delete_leftmost_leaf_updates_cache) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, delete_rightmost_leaf_updates_cache) {
@@ -1655,7 +1606,6 @@ TEST(FbtreeTest, delete_rightmost_leaf_updates_cache) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Rank Tests ========== */
@@ -1689,7 +1639,6 @@ TEST(FbtreeTest, rank_single_leaf) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, rank_multilevel) {
@@ -1723,7 +1672,6 @@ TEST(FbtreeTest, rank_multilevel) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, rank_after_delete) {
@@ -1748,7 +1696,6 @@ TEST(FbtreeTest, rank_after_delete) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, get_rank_of_item) {
@@ -1773,7 +1720,6 @@ TEST(FbtreeTest, get_rank_of_item) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_rank) {
@@ -1811,7 +1757,6 @@ TEST(FbtreeTest, seek_to_rank) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, rank_deep_tree) {
@@ -1849,10 +1794,9 @@ TEST(FbtreeTest, rank_deep_tree) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
-/* ========== fbtreeSeekToScore Tests ========== 
+/* ========== fbtreeSeekToScore Tests ==========
  * These tests use string literals where the first 8 bytes are the "score" prefix.
  * Lexicographic ordering: "AAAAAAAA" < "BBBBBBBB" < "CCCCCCCC" */
 
@@ -1874,7 +1818,6 @@ TEST(FbtreeTest, seek_to_score_exact) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_between) {
@@ -1894,7 +1837,6 @@ TEST(FbtreeTest, seek_to_score_between) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_past_end) {
@@ -1912,7 +1854,6 @@ TEST(FbtreeTest, seek_to_score_past_end) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_past_end_then_prev) {
@@ -1945,7 +1886,6 @@ TEST(FbtreeTest, seek_to_score_past_end_then_prev) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_before_start_then_next) {
@@ -1978,7 +1918,6 @@ TEST(FbtreeTest, seek_to_score_before_start_then_next) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_before_start) {
@@ -1997,7 +1936,6 @@ TEST(FbtreeTest, seek_to_score_before_start) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_empty) {
@@ -2013,7 +1951,6 @@ TEST(FbtreeTest, seek_to_score_empty) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_deep_tree) {
@@ -2046,7 +1983,6 @@ TEST(FbtreeTest, seek_to_score_deep_tree) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, seek_to_score_iterate) {
@@ -2074,7 +2010,6 @@ TEST(FbtreeTest, seek_to_score_iterate) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Inner Node Binary Search Tests ========== */
@@ -2128,7 +2063,6 @@ TEST(FbtreeTest, inner_bsearch_identical_feature_bytes) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 /* ========== Long Prefix Tests ========== */
@@ -2177,7 +2111,6 @@ TEST(FbtreeTest, long_prefix_basic) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, very_long_prefix) {
@@ -2216,7 +2149,6 @@ TEST(FbtreeTest, very_long_prefix) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, long_prefix_multilevel) {
@@ -2246,7 +2178,6 @@ TEST(FbtreeTest, long_prefix_multilevel) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, long_prefix_delete) {
@@ -2280,7 +2211,6 @@ TEST(FbtreeTest, long_prefix_delete) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, long_prefix_boundary) {
@@ -2323,7 +2253,6 @@ TEST(FbtreeTest, long_prefix_boundary) {
     }
 
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, long_prefix_shrink_to_short) {
@@ -2364,7 +2293,6 @@ TEST(FbtreeTest, long_prefix_shrink_to_short) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, long_prefix_realloc) {
@@ -2420,7 +2348,6 @@ TEST(FbtreeTest, long_prefix_realloc) {
     zfree(inserted);
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 /* ========== Pop Min/Max Tests ========== */
 
@@ -2444,7 +2371,6 @@ TEST(FbtreeTest, pop_min_single) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_max_single) {
@@ -2467,7 +2393,6 @@ TEST(FbtreeTest, pop_max_single) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_min_multiple) {
@@ -2506,7 +2431,6 @@ TEST(FbtreeTest, pop_min_multiple) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_max_multiple) {
@@ -2545,7 +2469,6 @@ TEST(FbtreeTest, pop_max_multiple) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_min_multilevel) {
@@ -2574,7 +2497,6 @@ TEST(FbtreeTest, pop_min_multilevel) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_max_multilevel) {
@@ -2603,7 +2525,6 @@ TEST(FbtreeTest, pop_max_multilevel) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_alternating) {
@@ -2637,7 +2558,6 @@ TEST(FbtreeTest, pop_alternating) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_empty) {
@@ -2650,7 +2570,6 @@ TEST(FbtreeTest, pop_empty) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }
 
 TEST(FbtreeTest, pop_with_iteration_and_insert) {
@@ -2717,5 +2636,4 @@ TEST(FbtreeTest, pop_with_iteration_and_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-
 }

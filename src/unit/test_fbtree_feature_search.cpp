@@ -156,8 +156,6 @@ TEST(FeatureSearchTest, expected_values) {
     TEST_ASSERT_MESSAGE("between: left", left == 2);
     TEST_ASSERT_MESSAGE("between: right", right == 2);
     testAllImpls(features, 4, t6);
-
-
 }
 
 /* ==========================================================================

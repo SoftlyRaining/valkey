@@ -196,31 +196,36 @@ static void zsetFbtreeSeekToRank(OrderedIndexIterator *iter, unsigned long rank)
 }
 
 static void zsetFbtreeSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    UNUSED(max);     /* max is checked during iteration, not seek */
+    UNUSED(max); /* max is checked during iteration, not seek */
     UNUSED(max_ex);
-    
+
     fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
     fbtreeIndex *fbt = NULL;
-    
+
     /* Get fbt pointer - need to init iterator first to extract it */
     /* The iterator stores fbt pointer after init, we need the index from caller context */
     /* For now, we require the iterator to already be initialized with the index */
-    
+
     /* Convert min score to sortable format */
     uint64_t min_sortable = scoreToSortable(min);
-    
+
     /* Seek to first element >= min */
     /* Note: fbtreeSeekToScore needs the fbt pointer, but we only have the iterator.
      * The iterator was initialized with fbtreeInitIterator which stores fbt internally.
      * We need to access it - for now extract from the opaque iterator. */
-    typedef struct { void *fbt; void *leaf; uint8_t idx; uint8_t cnt; } iter_internal;
+    typedef struct {
+        void *fbt;
+        void *leaf;
+        uint8_t idx;
+        uint8_t cnt;
+    } iter_internal;
     iter_internal *it = (iter_internal *)fbt_iter;
     fbt = (fbtreeIndex *)it->fbt;
-    
+
     if (!fbt) return; /* Iterator not initialized */
-    
+
     fbtreeSeekToScore(fbt, (const char *)&min_sortable, fbt_iter);
-    
+
     /* Handle exclusive min: skip elements with score == min */
     if (min_ex) {
         const_sds pos;
@@ -233,7 +238,7 @@ static void zsetFbtreeSeekToScoreRange(OrderedIndexIterator *iter, double min, d
             }
         }
     }
-    
+
     /* Apply offset */
     while (offset > 0) {
         const_sds pos;

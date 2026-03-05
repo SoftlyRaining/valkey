@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
 #include "config.h"
 #include "fbtree_ordered_index.h"
 #include "serverassert.h"
@@ -96,9 +97,9 @@ typedef struct {
 
 /* Hint for optimized tree traversal - allows skipping inner node searches */
 typedef enum {
-    HINT_NONE,      /* No hint - use normal search */
-    HINT_LEFTMOST,  /* Traverse to leftmost child at each level */
-    HINT_RIGHTMOST  /* Traverse to rightmost child at each level */
+    HINT_NONE,     /* No hint - use normal search */
+    HINT_LEFTMOST, /* Traverse to leftmost child at each level */
+    HINT_RIGHTMOST /* Traverse to rightmost child at each level */
 } TraversalHint;
 
 typedef struct {

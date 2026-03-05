@@ -6,16 +6,16 @@
 
 #include "generated_wrappers.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <cmath>
 
 extern "C" {
 /* Rename 'delete' to avoid C++ keyword conflict */
 #define delete delete_
-#include "server.h"
-#include "ordered_index.h"
 #include "fbtree_ordered_index.h"
+#include "ordered_index.h"
+#include "server.h"
 #undef delete
 }
 
@@ -36,7 +36,6 @@ static void test_create_free_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_insert_single_generic(const OrderedIndexOps *ops) {
@@ -63,7 +62,6 @@ static void test_insert_single_generic(const OrderedIndexOps *ops) {
 
     sdsfree(ele);
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
@@ -100,7 +98,6 @@ static void test_insert_multiple_ordered_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_duplicate_scores_generic(const OrderedIndexOps *ops) {
@@ -134,7 +131,6 @@ static void test_duplicate_scores_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_rank_operations_generic(const OrderedIndexOps *ops) {
@@ -163,7 +159,6 @@ static void test_rank_operations_generic(const OrderedIndexOps *ops) {
     }
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_delete_generic(const OrderedIndexOps *ops) {
@@ -200,7 +195,6 @@ static void test_delete_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_pop_first_generic(const OrderedIndexOps *ops) {
@@ -237,7 +231,6 @@ static void test_pop_first_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_pop_last_generic(const OrderedIndexOps *ops) {
@@ -274,7 +267,6 @@ static void test_pop_last_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 3);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_update_score_generic(const OrderedIndexOps *ops) {
@@ -319,7 +311,6 @@ static void test_update_score_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 1.0);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
@@ -359,7 +350,6 @@ static void test_delete_range_by_score_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 5);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
@@ -392,7 +382,6 @@ static void test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, node), 5.0);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *ops) {
@@ -431,7 +420,6 @@ static void test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_backward_traversal_after_deletions_generic(const OrderedIndexOps *ops) {
@@ -467,7 +455,6 @@ static void test_backward_traversal_after_deletions_generic(const OrderedIndexOp
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_lexicographic_edge_cases_generic(const OrderedIndexOps *ops) {
@@ -528,7 +515,6 @@ static void test_lexicographic_edge_cases_generic(const OrderedIndexOps *ops) {
     sdsfree(long_str);
     sdsfree(short_str);
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_range_boundary_precision_generic(const OrderedIndexOps *ops) {
@@ -565,7 +551,6 @@ static void test_range_boundary_precision_generic(const OrderedIndexOps *ops) {
     sdsfree(ele2);
     sdsfree(ele3);
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_special_double_values_generic(const OrderedIndexOps *ops) {
@@ -647,7 +632,6 @@ static void test_special_double_values_generic(const OrderedIndexOps *ops) {
     sdsfree(denorm_ele);
     sdsfree(normal_ele);
     orderedIndexFree(ops, idx);
-
 }
 
 
@@ -665,7 +649,6 @@ static void test_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexGetByRank(ops, idx, 1) == NULL);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
@@ -708,7 +691,6 @@ static void test_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_rank_edge_cases_generic(const OrderedIndexOps *ops) {
@@ -735,7 +717,6 @@ static void test_rank_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexGetByRank(ops, idx, 5) != NULL);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_duplicate_insert_generic(const OrderedIndexOps *ops) {
@@ -754,7 +735,6 @@ static void test_duplicate_insert_generic(const OrderedIndexOps *ops) {
     sdsfree(ele1);
     sdsfree(ele2);
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
@@ -798,7 +778,6 @@ static void test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexGetScore(ops, updated) < old_score);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
@@ -848,7 +827,6 @@ static void test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(orderedIndexLength(ops, idx) == 0);
 
     orderedIndexFree(ops, idx);
-
 }
 
 
@@ -877,7 +855,6 @@ static void test_traversal_edge_cases_generic(const OrderedIndexOps *ops) {
 
     sdsfree(ele);
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
@@ -946,7 +923,6 @@ static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_reverse_iteration_generic(const OrderedIndexOps *ops) {
@@ -993,7 +969,6 @@ static void test_reverse_iteration_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
@@ -1071,7 +1046,6 @@ static void test_seek_to_score_range_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 static void test_seek_to_score_range_iteration_generic(const OrderedIndexOps *ops) {
@@ -1128,7 +1102,6 @@ static void test_seek_to_score_range_iteration_generic(const OrderedIndexOps *op
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 /* Test ZREVRANGEBYSCORE +inf behavior: seek to last element and iterate backwards.
@@ -1173,7 +1146,6 @@ static void test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) 
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 /* Test ZRANGEBYSCORE -inf behavior: seek to first element and iterate forwards.
@@ -1208,68 +1180,167 @@ static void test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) 
     orderedIndexResetIterator(ops, &iter);
 
     orderedIndexFree(ops, idx);
-
 }
 
 /* ========== Skiplist Tests ========== */
 
 class SkiplistOrderedIndexTest : public ::testing::Test {};
 
-TEST_F(SkiplistOrderedIndexTest, CreateFree) { test_create_free_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, InsertSingle) { test_insert_single_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, InsertMultipleOrdered) { test_insert_multiple_ordered_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, DuplicateScores) { test_duplicate_scores_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, RankOperations) { test_rank_operations_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, Delete) { test_delete_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, PopFirst) { test_pop_first_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, PopLast) { test_pop_last_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, UpdateScore) { test_update_score_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, DeleteRangeByScore) { test_delete_range_by_score_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, DeleteRangeByRank) { test_delete_range_by_rank_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, EdgeCases) { test_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, DeleteEdgeCases) { test_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, RankEdgeCases) { test_rank_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, DuplicateInsert) { test_duplicate_insert_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, UpdateScoreEdgeCases) { test_update_score_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, RangeDeleteEdgeCases) { test_range_delete_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, TraversalEdgeCases) { test_traversal_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, MixedOperationsRankIntegrity) { test_mixed_operations_rank_integrity_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, BackwardTraversalAfterDeletions) { test_backward_traversal_after_deletions_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, LexicographicEdgeCases) { test_lexicographic_edge_cases_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, RangeBoundaryPrecision) { test_range_boundary_precision_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, SpecialDoubleValues) { test_special_double_values_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, SeekToRank) { test_seek_to_rank_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, ReverseIteration) { test_reverse_iteration_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, SeekToScoreRange) { test_seek_to_score_range_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, SeekToScoreRangeIteration) { test_seek_to_score_range_iteration_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, SeekInfReverseIteration) { test_seek_inf_reverse_iteration_generic(&skiplistOrderedIndexOps); }
-TEST_F(SkiplistOrderedIndexTest, SeekInfForwardIteration) { test_seek_inf_forward_iteration_generic(&skiplistOrderedIndexOps); }
+TEST_F(SkiplistOrderedIndexTest, CreateFree) {
+    test_create_free_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, InsertSingle) {
+    test_insert_single_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, InsertMultipleOrdered) {
+    test_insert_multiple_ordered_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DuplicateScores) {
+    test_duplicate_scores_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RankOperations) {
+    test_rank_operations_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, Delete) {
+    test_delete_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, PopFirst) {
+    test_pop_first_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, PopLast) {
+    test_pop_last_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, UpdateScore) {
+    test_update_score_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByScore) {
+    test_delete_range_by_score_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DeleteRangeByRank) {
+    test_delete_range_by_rank_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, EdgeCases) {
+    test_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DeleteEdgeCases) {
+    test_delete_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RankEdgeCases) {
+    test_rank_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, DuplicateInsert) {
+    test_duplicate_insert_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, UpdateScoreEdgeCases) {
+    test_update_score_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RangeDeleteEdgeCases) {
+    test_range_delete_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, TraversalEdgeCases) {
+    test_traversal_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, MixedOperationsRankIntegrity) {
+    test_mixed_operations_rank_integrity_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, BackwardTraversalAfterDeletions) {
+    test_backward_traversal_after_deletions_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, LexicographicEdgeCases) {
+    test_lexicographic_edge_cases_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, RangeBoundaryPrecision) {
+    test_range_boundary_precision_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, SpecialDoubleValues) {
+    test_special_double_values_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, SeekToRank) {
+    test_seek_to_rank_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, ReverseIteration) {
+    test_reverse_iteration_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, SeekToScoreRange) {
+    test_seek_to_score_range_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, SeekToScoreRangeIteration) {
+    test_seek_to_score_range_iteration_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, SeekInfReverseIteration) {
+    test_seek_inf_reverse_iteration_generic(&skiplistOrderedIndexOps);
+}
+TEST_F(SkiplistOrderedIndexTest, SeekInfForwardIteration) {
+    test_seek_inf_forward_iteration_generic(&skiplistOrderedIndexOps);
+}
 
 /* ========== Fbtree Tests ========== */
 
 class FbtreeOrderedIndexTest : public ::testing::Test {};
 
-TEST_F(FbtreeOrderedIndexTest, CreateFree) { test_create_free_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, InsertSingle) { test_insert_single_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, InsertMultipleOrdered) { test_insert_multiple_ordered_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, DuplicateScores) { test_duplicate_scores_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, RankOperations) { test_rank_operations_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, Delete) { test_delete_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, PopFirst) { test_pop_first_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, PopLast) { test_pop_last_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, UpdateScore) { test_update_score_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, EdgeCases) { test_edge_cases_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, DeleteEdgeCases) { test_delete_edge_cases_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, RankEdgeCases) { test_rank_edge_cases_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, DuplicateInsert) { test_duplicate_insert_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, UpdateScoreEdgeCases) { test_update_score_edge_cases_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, TraversalEdgeCases) { test_traversal_edge_cases_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, MixedOperationsRankIntegrity) { test_mixed_operations_rank_integrity_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, BackwardTraversalAfterDeletions) { test_backward_traversal_after_deletions_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, LexicographicEdgeCases) { test_lexicographic_edge_cases_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, SpecialDoubleValues) { test_special_double_values_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, SeekToRank) { test_seek_to_rank_generic(&fbtreeOrderedIndexOps); }
-TEST_F(FbtreeOrderedIndexTest, ReverseIteration) { test_reverse_iteration_generic(&fbtreeOrderedIndexOps); }
+TEST_F(FbtreeOrderedIndexTest, CreateFree) {
+    test_create_free_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, InsertSingle) {
+    test_insert_single_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, InsertMultipleOrdered) {
+    test_insert_multiple_ordered_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, DuplicateScores) {
+    test_duplicate_scores_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, RankOperations) {
+    test_rank_operations_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, Delete) {
+    test_delete_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, PopFirst) {
+    test_pop_first_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, PopLast) {
+    test_pop_last_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, UpdateScore) {
+    test_update_score_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, EdgeCases) {
+    test_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, DeleteEdgeCases) {
+    test_delete_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, RankEdgeCases) {
+    test_rank_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, DuplicateInsert) {
+    test_duplicate_insert_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, UpdateScoreEdgeCases) {
+    test_update_score_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, TraversalEdgeCases) {
+    test_traversal_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, MixedOperationsRankIntegrity) {
+    test_mixed_operations_rank_integrity_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, BackwardTraversalAfterDeletions) {
+    test_backward_traversal_after_deletions_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, LexicographicEdgeCases) {
+    test_lexicographic_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, SpecialDoubleValues) {
+    test_special_double_values_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, SeekToRank) {
+    test_seek_to_rank_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, ReverseIteration) {
+    test_reverse_iteration_generic(&fbtreeOrderedIndexOps);
+}
 
 /* NOTE: These tests require delete_range_by_score/rank which are not yet implemented for fbtree:
  * - DeleteRangeByScore, DeleteRangeByRank, RangeDeleteEdgeCases, RangeBoundaryPrecision

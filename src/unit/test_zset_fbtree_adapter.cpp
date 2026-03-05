@@ -8,9 +8,9 @@
 
 #include "generated_wrappers.hpp"
 
-#include <cstring>
-#include <cmath>
 #include <cfloat>
+#include <cmath>
+#include <cstring>
 
 extern "C" {
 #include "fbtree_ordered_index.h"
@@ -34,7 +34,7 @@ static int sortableCmp(uint64_t a, uint64_t b) {
 
 TEST(ZsetFbtreeAdapterTest, score_roundtrip_positive) {
     double scores[] = {0.0, 1.0, 1.5, 100.0, 1e10, DBL_MAX};
-    for (size_t i = 0; i < sizeof(scores)/sizeof(scores[0]); i++) {
+    for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]); i++) {
         uint64_t sortable = scoreToSortable_test(scores[i]);
         double back = sortableToScore_test(sortable);
         ASSERT_EQ(back, scores[i]);
@@ -43,7 +43,7 @@ TEST(ZsetFbtreeAdapterTest, score_roundtrip_positive) {
 
 TEST(ZsetFbtreeAdapterTest, score_roundtrip_negative) {
     double scores[] = {-0.0, -1.0, -1.5, -100.0, -1e10, -DBL_MAX};
-    for (size_t i = 0; i < sizeof(scores)/sizeof(scores[0]); i++) {
+    for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]); i++) {
         uint64_t sortable = scoreToSortable_test(scores[i]);
         double back = sortableToScore_test(sortable);
         ASSERT_EQ(back, scores[i]);
@@ -52,7 +52,7 @@ TEST(ZsetFbtreeAdapterTest, score_roundtrip_negative) {
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_special) {
     double scores[] = {-INFINITY, -1.0, 0.0, 1.0, INFINITY};
-    size_t n = sizeof(scores)/sizeof(scores[0]);
+    size_t n = sizeof(scores) / sizeof(scores[0]);
     for (size_t i = 0; i < n; i++) {
         for (size_t j = 0; j < n; j++) {
             uint64_t a = scoreToSortable_test(scores[i]);
@@ -77,37 +77,37 @@ TEST(ZsetFbtreeAdapterTest, score_ordering_signed_zero) {
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_positive) {
     double scores[] = {0.0, 0.1, 1.0, 10.0, 100.0, DBL_MAX};
-    for (size_t i = 0; i < sizeof(scores)/sizeof(scores[0]) - 1; i++) {
+    for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]) - 1; i++) {
         uint64_t a = scoreToSortable_test(scores[i]);
-        uint64_t b = scoreToSortable_test(scores[i+1]);
-        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i+1]));
+        uint64_t b = scoreToSortable_test(scores[i + 1]);
+        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i + 1]));
     }
 }
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_negative) {
     double scores[] = {-DBL_MAX, -100.0, -10.0, -1.0, -0.1};
-    for (size_t i = 0; i < sizeof(scores)/sizeof(scores[0]) - 1; i++) {
+    for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]) - 1; i++) {
         uint64_t a = scoreToSortable_test(scores[i]);
-        uint64_t b = scoreToSortable_test(scores[i+1]);
-        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i+1]));
+        uint64_t b = scoreToSortable_test(scores[i + 1]);
+        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i + 1]));
     }
 }
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_mixed) {
     double scores[] = {-INFINITY, -DBL_MAX, -1.0, -0.1, 0.0, 0.1, 1.0, DBL_MAX, INFINITY};
-    for (size_t i = 0; i < sizeof(scores)/sizeof(scores[0]) - 1; i++) {
+    for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]) - 1; i++) {
         uint64_t a = scoreToSortable_test(scores[i]);
-        uint64_t b = scoreToSortable_test(scores[i+1]);
-        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i+1]));
+        uint64_t b = scoreToSortable_test(scores[i + 1]);
+        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i + 1]));
     }
 }
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_subnormal) {
     double scores[] = {-DBL_MIN, 0.0, DBL_MIN, DBL_MIN * 2};
-    for (size_t i = 0; i < sizeof(scores)/sizeof(scores[0]) - 1; i++) {
+    for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]) - 1; i++) {
         uint64_t a = scoreToSortable_test(scores[i]);
-        uint64_t b = scoreToSortable_test(scores[i+1]);
-        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i+1]));
+        uint64_t b = scoreToSortable_test(scores[i + 1]);
+        ASSERT_EQ((sortableCmp(a, b) < 0), (scores[i] < scores[i + 1]));
     }
 }
 
@@ -236,7 +236,11 @@ TEST(ZsetFbtreeAdapterTest, packed_same_score_element_order) {
     ASSERT_LT(sdscmp(p1, p2), 0);
     ASSERT_LT(sdscmp(p2, p3), 0);
 
-    sdsfree(e1); sdsfree(e2); sdsfree(e3);
-    sdsfree(p1); sdsfree(p2); sdsfree(p3);
+    sdsfree(e1);
+    sdsfree(e2);
+    sdsfree(e3);
+    sdsfree(p1);
+    sdsfree(p2);
+    sdsfree(p3);
     ASSERT_EQ(zmalloc_used_memory(), mem_before);
 }
