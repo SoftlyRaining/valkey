@@ -253,7 +253,7 @@ const OrderedIndexOps fbtreeOrderedIndexOps = {
     .free = zsetFbtreeFree,
     /* Modification */
     .insert = zsetFbtreeInsert,
-    .delete = zsetFbtreeDelete,
+    .deleteItem = zsetFbtreeDelete,
     .update_score = zsetFbtreeUpdateScore,
     .pop_first = zsetFbtreePopFirst,
     .pop_last = zsetFbtreePopLast,

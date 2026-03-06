@@ -37,7 +37,7 @@ TEST(ZsetFbtreeAdapterTest, score_roundtrip_positive) {
     for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]); i++) {
         uint64_t sortable = scoreToSortable_test(scores[i]);
         double back = sortableToScore_test(sortable);
-        ASSERT_EQ(back, scores[i]);
+        ASSERT_DOUBLE_EQ(back, scores[i]);
     }
 }
 
@@ -46,12 +46,12 @@ TEST(ZsetFbtreeAdapterTest, score_roundtrip_negative) {
     for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]); i++) {
         uint64_t sortable = scoreToSortable_test(scores[i]);
         double back = sortableToScore_test(sortable);
-        ASSERT_EQ(back, scores[i]);
+        ASSERT_DOUBLE_EQ(back, scores[i]);
     }
 }
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_special) {
-    double scores[] = {-INFINITY, -1.0, 0.0, 1.0, INFINITY};
+    double scores[] = {(double)-INFINITY, -1.0, 0.0, 1.0, (double)INFINITY};
     size_t n = sizeof(scores) / sizeof(scores[0]);
     for (size_t i = 0; i < n; i++) {
         for (size_t j = 0; j < n; j++) {
@@ -94,7 +94,7 @@ TEST(ZsetFbtreeAdapterTest, score_ordering_negative) {
 }
 
 TEST(ZsetFbtreeAdapterTest, score_ordering_mixed) {
-    double scores[] = {-INFINITY, -DBL_MAX, -1.0, -0.1, 0.0, 0.1, 1.0, DBL_MAX, INFINITY};
+    double scores[] = {(double)-INFINITY, -DBL_MAX, -1.0, -0.1, 0.0, 0.1, 1.0, DBL_MAX, (double)INFINITY};
     for (size_t i = 0; i < sizeof(scores) / sizeof(scores[0]) - 1; i++) {
         uint64_t a = scoreToSortable_test(scores[i]);
         uint64_t b = scoreToSortable_test(scores[i + 1]);
@@ -123,7 +123,7 @@ TEST(ZsetFbtreeAdapterTest, pack_unpack_basic) {
     const char *unpacked_ele = unpackElement_test(packed, &len);
     double unpacked_score = unpackScore_test(packed);
 
-    ASSERT_EQ(unpacked_score, 42.5);
+    ASSERT_DOUBLE_EQ(unpacked_score, 42.5);
     ASSERT_EQ(len, 5u);
     ASSERT_EQ(memcmp(unpacked_ele, "hello", 5), 0);
 
@@ -142,7 +142,7 @@ TEST(ZsetFbtreeAdapterTest, pack_unpack_empty_element) {
     unpackElement_test(packed, &len);
     double unpacked_score = unpackScore_test(packed);
 
-    ASSERT_EQ(unpacked_score, 0.0);
+    ASSERT_DOUBLE_EQ(unpacked_score, 0.0);
     ASSERT_EQ(len, 0u);
 
     sdsfree(ele);
@@ -161,7 +161,7 @@ TEST(ZsetFbtreeAdapterTest, pack_unpack_binary_element) {
     const char *unpacked_ele = unpackElement_test(packed, &len);
     double unpacked_score = unpackScore_test(packed);
 
-    ASSERT_EQ(unpacked_score, -999.0);
+    ASSERT_DOUBLE_EQ(unpacked_score, -999.0);
     ASSERT_EQ(len, sizeof(binary));
     ASSERT_EQ(memcmp(unpacked_ele, binary, sizeof(binary)), 0);
 
@@ -177,7 +177,7 @@ TEST(ZsetFbtreeAdapterTest, pack_unpack_negative_score) {
     sds packed = packScoreElement_test(-123.456, ele);
 
     double unpacked_score = unpackScore_test(packed);
-    ASSERT_EQ(unpacked_score, -123.456);
+    ASSERT_DOUBLE_EQ(unpacked_score, -123.456);
 
     sdsfree(ele);
     sdsfree(packed);
@@ -189,11 +189,11 @@ TEST(ZsetFbtreeAdapterTest, pack_unpack_infinity) {
 
     sds ele = sdsnew("inf");
 
-    sds packed_pos = packScoreElement_test(INFINITY, ele);
-    ASSERT_EQ(unpackScore_test(packed_pos), INFINITY);
+    sds packed_pos = packScoreElement_test((double)INFINITY, ele);
+    ASSERT_DOUBLE_EQ(unpackScore_test(packed_pos), (double)INFINITY);
 
-    sds packed_neg = packScoreElement_test(-INFINITY, ele);
-    ASSERT_EQ(unpackScore_test(packed_neg), -INFINITY);
+    sds packed_neg = packScoreElement_test((double)-INFINITY, ele);
+    ASSERT_DOUBLE_EQ(unpackScore_test(packed_neg), (double)-INFINITY);
 
     sdsfree(ele);
     sdsfree(packed_pos);

@@ -115,7 +115,7 @@ const OrderedIndexOps skiplistOrderedIndexOps = {
     .free = skiplistFree,
     /* Modification */
     .insert = skiplistInsert,
-    .delete = skiplistDelete,
+    .deleteItem = skiplistDelete,
     .update_score = skiplistUpdateScore,
     .pop_first = skiplistPopFirst,
     .pop_last = skiplistPopLast,

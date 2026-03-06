@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include "config.h"
 #include "fbtree_ordered_index.h"
@@ -1344,7 +1345,7 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
     bool valid = (count <= NODE_SIZE);
 
     if (verbose) {
-        printf(" Leaf (%lu items)\n", count);
+        printf(" Leaf (%" PRIu64 " items)\n", count);
         if (!valid) printf(" \033[31m[bad high_key]\033[0m");
         printf("\n");
 
@@ -1395,7 +1396,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         /* Recursively validate child and get its size */
         if (verbose) {
             printIndent(depth);
-            printf("\u251c\u2500[%02d] size=%lu anchor=", i, inner->child_sizes[i]);
+            printf("\u251c\u2500[%02d] size=%" PRIu64 " anchor=", i, inner->child_sizes[i]);
             printBinaryString(anchor);
         }
 
@@ -1417,7 +1418,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
             if (!prefix_ok) printf("prefix ");
             if (!anchor_ok) printf("anchor ");
             if (!feature_ok) printf("feature ");
-            if (!size_ok) printf("size(%lu!=%lu) ", inner->child_sizes[i], child_result.size);
+            if (!size_ok) printf("size(%" PRIu64 "!=%" PRIu64 ") ", inner->child_sizes[i], child_result.size);
             printf("FAIL\033[0m\n");
         }
     }
@@ -1451,7 +1452,7 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
     /* Also verify total size matches computed length */
     bool length_ok = (result.size == length);
     if (!length_ok && verbose) {
-        printf("\033[31mERROR: tree size %lu != computed length %lu\033[0m\n", result.size, length);
+        printf("\033[31mERROR: tree size %" PRIu64 " != computed length %lu\033[0m\n", result.size, length);
     }
 
     /* Verify leaf caches point to actual leftmost/rightmost leaves */

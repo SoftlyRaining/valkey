@@ -564,8 +564,8 @@ static void test_special_double_values_generic(const OrderedIndexOps *ops) {
     sds zero = sdsnew("zero");
     sds one = sdsnew("one");
 
-    orderedIndexInsert(ops, idx, -INFINITY, neg_inf);
-    orderedIndexInsert(ops, idx, INFINITY, pos_inf);
+    orderedIndexInsert(ops, idx, (double)-INFINITY, neg_inf);
+    orderedIndexInsert(ops, idx, (double)INFINITY, pos_inf);
     orderedIndexInsert(ops, idx, 0.0, zero);
     orderedIndexInsert(ops, idx, 1.0, one);
 
@@ -574,13 +574,13 @@ static void test_special_double_values_generic(const OrderedIndexOps *ops) {
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), -INFINITY);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)-INFINITY);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 0.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
-    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), INFINITY);
+    TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), (double)INFINITY);
     orderedIndexResetIterator(ops, &iter);
 
     sdsfree(neg_inf);
@@ -1124,7 +1124,7 @@ static void test_seek_inf_reverse_iteration_generic(const OrderedIndexOps *ops) 
     /* Seek to [-inf, +inf] with offset -1 (last element), then iterate backwards.
      * This is how ZREVRANGEBYSCORE -inf +inf works. */
     orderedIndexInitIterator(ops, &iter, idx);
-    orderedIndexSeekToScoreRange(ops, &iter, -INFINITY, INFINITY, 0, 0, -1);
+    orderedIndexSeekToScoreRange(ops, &iter, (double)-INFINITY, (double)INFINITY, 0, 0, -1);
     int count = 0;
     double expected = 5.0;
     while (orderedIndexNext(ops, &iter, &pos)) {
@@ -1168,7 +1168,7 @@ static void test_seek_inf_forward_iteration_generic(const OrderedIndexOps *ops) 
     /* Seek to [-inf, +inf] with offset 0 (first element), then iterate forwards.
      * This is how ZRANGEBYSCORE -inf +inf works. */
     orderedIndexInitIterator(ops, &iter, idx);
-    orderedIndexSeekToScoreRange(ops, &iter, -INFINITY, INFINITY, 0, 0, 0);
+    orderedIndexSeekToScoreRange(ops, &iter, (double)-INFINITY, (double)INFINITY, 0, 0, 0);
     int count = 0;
     double expected = 1.0;
     while (orderedIndexNext(ops, &iter, &pos)) {

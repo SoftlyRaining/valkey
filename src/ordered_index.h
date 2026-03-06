@@ -16,7 +16,7 @@ typedef struct OrderedIndexOps {
 
     /* Modification */
     OrderedIndexItem *(*insert)(OrderedIndex *idx, double score, const_sds ele);
-    void (*delete)(OrderedIndex *idx, OrderedIndexItem *pos);
+    void (*deleteItem)(OrderedIndex *idx, OrderedIndexItem *pos);
     OrderedIndexItem *(*update_score)(OrderedIndex *idx, OrderedIndexItem *pos, double newscore);
     OrderedIndexItem *(*pop_first)(OrderedIndex *idx);
     OrderedIndexItem *(*pop_last)(OrderedIndex *idx);
@@ -59,7 +59,7 @@ static inline OrderedIndexItem *orderedIndexInsert(const OrderedIndexOps *ops, O
 }
 
 static inline void orderedIndexDelete(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos) {
-    ops->delete (idx, pos);
+    ops->deleteItem(idx, pos);
 }
 
 static inline OrderedIndexItem *orderedIndexUpdateScore(const OrderedIndexOps *ops, OrderedIndex *idx, OrderedIndexItem *pos, double newscore) {

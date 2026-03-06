@@ -123,6 +123,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/mutexqueue.c
     ${CMAKE_SOURCE_DIR}/src/fbtree_ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/zset_fbtree_adapter.c
+    ${CMAKE_SOURCE_DIR}/src/skiplist_ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/queues.c)
 
 
