@@ -219,16 +219,16 @@ struct ValkeyModuleKey {
         } list;
         struct {
             /* Zset iterator, use only if value->type == OBJ_ZSET */
-            uint32_t type;     /* VALKEYMODULE_ZSET_RANGE_* */
-            zrangespec rs;     /* Score range. */
-            zlexrangespec lrs; /* Lex range. */
-            uint32_t start;    /* Start pos for positional ranges. */
-            uint32_t end;      /* End pos for positional ranges. */
-            void *current;     /* Current node for listpack, or NULL for skiplist. */
+            uint32_t type;          /* VALKEYMODULE_ZSET_RANGE_* */
+            zrangespec rs;          /* Score range. */
+            zlexrangespec lrs;      /* Lex range. */
+            uint32_t start;         /* Start pos for positional ranges. */
+            uint32_t end;           /* End pos for positional ranges. */
+            void *current;          /* Current node for listpack, or NULL for skiplist. */
             zskiplistIterator iter; /* Skiplist iterator. */
             zskiplistNode *node;    /* Current node from skiplist iterator. */
-            int er;            /* Zset iterator end reached flag
-                                   (true if end was reached). */
+            int er;                 /* Zset iterator end reached flag
+                                        (true if end was reached). */
         } zset;
         struct {
             /* Stream, use only if value->type == OBJ_STREAM */
