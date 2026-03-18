@@ -13,7 +13,7 @@ concurrency:
 jobs:
   determine-release-branches:
     if: github.repository == 'valkey-io/valkey'
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     outputs:
       branches: ${{ steps.release-branches.outputs.branches }}
       has-branches: ${{ steps.release-branches.outputs.has-branches }}

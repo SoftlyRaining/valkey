@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   test-external-standalone:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
@@ -56,7 +56,7 @@ jobs:
           path: external-server.log
 
   test-external-cluster:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:
@@ -93,7 +93,7 @@ jobs:
           path: external-server.log
 
   test-external-nodebug:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 1440
     steps:

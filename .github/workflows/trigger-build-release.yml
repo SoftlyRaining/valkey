@@ -21,7 +21,7 @@ on:
 
 jobs:
   trigger:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Determine version and environment
         id: determine-vars

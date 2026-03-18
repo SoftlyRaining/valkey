@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   test-ubuntu-latest:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -55,7 +55,7 @@ jobs:
           ./src/unit/valkey-unit-gtests
 
   test-ubuntu-latest-compatibility:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +100,7 @@ jobs:
             --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
 
   test-ubuntu-latest-cmake-tls:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: cmake and make
@@ -120,7 +120,7 @@ jobs:
           ./build-release/bin/valkey-unit-gtests
 
   test-sanitizer-address:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -147,7 +147,7 @@ jobs:
           ./src/unit/valkey-unit-gtests
 
   test-rdma:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -179,7 +179,7 @@ jobs:
         run: sudo dmesg -c
 
   test-tls-only:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: generate-test-certificates
@@ -198,7 +198,7 @@ jobs:
         run: ./runtest --verbose --single unit/tls --dump-logs --tls
 
   build-debian-old:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     container: debian:bullseye
     steps:
       - name: Install libbacktrace
@@ -241,7 +241,7 @@ jobs:
           make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes LIBBACKTRACE_PREFIX=/usr/local
 
   build-32bit:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -286,7 +286,7 @@ jobs:
           ./src/unit/valkey-unit-gtests
 
   build-libc-malloc:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Install libbacktrace
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -301,7 +301,7 @@ jobs:
         run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc USE_LIBBACKTRACE=yes
 
   build-almalinux8-jemalloc:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     container: almalinux:8
     steps:
       - name: Install libbacktrace
@@ -320,7 +320,7 @@ jobs:
         run: make -j4 SERVER_CFLAGS='-Werror' USE_LIBBACKTRACE=yes
 
   format-yaml:
-    runs-on: ubuntu-latest
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

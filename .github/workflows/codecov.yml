@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   code-coverage:
-    runs-on: ubuntu-22.04
+    runs-on: codebuild-rainval-oss-valkey-fork-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Install libbacktrace
