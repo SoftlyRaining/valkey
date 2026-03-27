@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <numeric>
 #include <vector>
 
 extern "C" {
@@ -17,9 +18,7 @@ extern "C" {
 #include "zmalloc.h"
 }
 
-#define TEST_ASSERT(x) ASSERT_TRUE(x)
-
-/* ========== Test Helpers ========== */
+/* ========== Constants matching fbtree_ordered_index.c internals ========== */
 
 /* Node capacity - must match NODE_SIZE in fbtree_ordered_index.c */
 #define TEST_NODE_CAPACITY 61
@@ -29,6 +28,8 @@ extern "C" {
 /* Size limit of embedded prefix - must match EMBED_PREFIX_LEN in fbtree_ordered_index.c */
 #define TEST_EMBED_PREFIX_LEN 54
 
+/* ========== Test Helpers ========== */
+
 /* Create a null-terminated sds from a C string. */
 static sds createString(const char *str) {
     size_t len = strlen(str) + 1;
@@ -36,7 +37,7 @@ static sds createString(const char *str) {
 }
 
 /* Create a string like "prefix" + base-26 encoded value + "suffix".
- * E.g., value=0 → "AAA", value=1 → "AAB", value=26 → "ABA", value=27 → "ABB". */
+ * E.g., value=0 -> "AAA", value=1 -> "AAB", value=26 -> "ABA". */
 static sds createBase26TestString(const char *prefix, const char *suffix, size_t value, size_t value_width) {
     size_t prefix_len = strlen(prefix);
     size_t suffix_len = strlen(suffix);
@@ -44,7 +45,6 @@ static sds createBase26TestString(const char *prefix, const char *suffix, size_t
     sds s = sdsnewlen(NULL, len);
     memcpy(s, prefix, prefix_len);
 
-    /* Encode value as base-26 letters (A=0, B=1, ..., Z=25) */
     for (size_t i = 0; i < value_width; i++) {
         char c = (char)('A' + (value % 26));
         s[prefix_len + value_width - 1 - i] = c;
@@ -56,963 +56,767 @@ static sds createBase26TestString(const char *prefix, const char *suffix, size_t
     return s;
 }
 
-/* Validate tree invariants. Returns false if tree is corrupted. */
-bool is_tree_valid(fbtreeIndex *fbt) {
-    /* TODO: re-enable verbose output once tests stabilize */
-    return fbtreeDebugValidate(fbt, false);
+static sds createPrefixString(const char *prefix_char, size_t prefix_len, const char *suffix) {
+    size_t suffix_len = strlen(suffix) + 1; /* include null terminator */
+    sds s = sdsnewlen(NULL, prefix_len + suffix_len);
+    memset(s, prefix_char[0], prefix_len);
+    memcpy(s + prefix_len, suffix, suffix_len);
+    return s;
 }
+
+/* ========== RAII Fixture ========== */
+
+/* Base fixture that handles tree lifecycle and memory-leak detection. */
+class FbtreeTest : public ::testing::Test {
+  protected:
+    fbtreeIndex *fbt = nullptr;
+    size_t mem_before = 0;
+
+    void SetUp() override {
+        mem_before = zmalloc_used_memory();
+        fbt = fbtreeCreate();
+    }
+
+    void TearDown() override {
+        if (fbt) fbtreeFree(fbt);
+        EXPECT_EQ(zmalloc_used_memory(), mem_before) << "Memory leak detected";
+    }
+
+    /* Validate tree invariants. */
+    void expectValid() {
+        ASSERT_TRUE(fbtreeDebugValidate(fbt, false)) << "Tree invariant violation";
+    }
+
+    /* Insert a null-terminated C string, return the stored pointer. */
+    sds insert(const char *str) {
+        return fbtreeInsert(fbt, createString(str));
+    }
+
+    /* Collect all elements via forward iteration into a vector. */
+    std::vector<std::string> collectForward() {
+        std::vector<std::string> result;
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        const_sds pos;
+        while (fbtreeNext(&it, &pos)) {
+            result.emplace_back(pos, sdslen(pos));
+        }
+        return result;
+    }
+
+    /* Collect all elements via backward iteration into a vector. */
+    std::vector<std::string> collectBackward() {
+        std::vector<std::string> result;
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        const_sds pos;
+        while (fbtreePrev(&it, &pos)) {
+            result.emplace_back(pos, sdslen(pos));
+        }
+        return result;
+    }
+};
 
 /* ========== Basic Lifecycle Tests ========== */
 
-TEST(FbtreeTest, create_and_free) {
-    size_t used_memory_before = zmalloc_used_memory();
-
-    fbtreeIndex *fbt = fbtreeCreate();
-    TEST_ASSERT(fbt != NULL);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+TEST_F(FbtreeTest, CreateAndFree) {
+    ASSERT_NE(fbt, nullptr);
+    expectValid();
+    /* TearDown verifies no leak */
 }
 
 /* Verify node sizes fit expected jemalloc size classes.
  * innerNode should fit in 1792-byte class, leafNode in 512-byte class.
  * This catches accidental struct bloat that wastes memory. */
-TEST(FbtreeTest, node_allocation_sizes) {
-    /* Directly test allocation sizes using zmalloc_usable_size */
+TEST_F(FbtreeTest, NodeAllocationSizes) {
     void *inner_test = zmalloc(1784); /* sizeof(innerNode) */
     void *leaf_test = zmalloc(512);   /* sizeof(leafNode) */
 
-    size_t inner_actual = zmalloc_usable_size(inner_test);
-    size_t leaf_actual = zmalloc_usable_size(leaf_test);
-
-    /* innerNode (1784 bytes) should fit in 1792-byte jemalloc class */
-    TEST_ASSERT(inner_actual == 1792);
-
-    /* leafNode (512 bytes) should fit in 512-byte jemalloc class */
-    TEST_ASSERT(leaf_actual == 512);
+    EXPECT_EQ(zmalloc_usable_size(inner_test), 1792u);
+    EXPECT_EQ(zmalloc_usable_size(leaf_test), 512u);
 
     zfree(inner_test);
     zfree(leaf_test);
 }
 
-TEST(FbtreeTest, insert_and_lookup) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+/* ========== Insert & Lookup Tests ========== */
 
-    sds str = createString("hello");
-    sds inserted = fbtreeInsert(fbt, str);
-    TEST_ASSERT(is_tree_valid(fbt));
+TEST_F(FbtreeTest, InsertAndLookup) {
+    sds inserted = insert("hello");
+    expectValid();
 
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted) >= 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
 
-    sds search_string2 = createString("world");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search_string2) < 0);
-    sdsfree(search_string2);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    sds missing = createString("world");
+    EXPECT_LT(fbtreeGetRankOfItem(fbt, missing), 0);
+    sdsfree(missing);
 }
 
-TEST(FbtreeTest, insert_multiple) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, InsertMultiple) {
     const char *strings[] = {"apple", "banana", "cherry", "date", "elderberry", "elder"};
-    int count = sizeof(strings) / sizeof(strings[0]);
     sds inserted[6];
-
-    for (int i = 0; i < count; i++) {
-        sds str = createString(strings[i]);
-        inserted[i] = fbtreeInsert(fbt, str);
+    for (int i = 0; i < 6; i++) {
+        inserted[i] = insert(strings[i]);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+    for (int i = 0; i < 6; i++) {
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
 
-    sds search_str = createString("fig");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search_str) < 0);
-    sdsfree(search_str);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    sds missing = createString("fig");
+    EXPECT_LT(fbtreeGetRankOfItem(fbt, missing), 0);
+    sdsfree(missing);
 }
 
-TEST(FbtreeTest, lookup_empty_tree) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    sds search_str = createString("anything");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search_str) < 0);
-    sdsfree(search_str);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+TEST_F(FbtreeTest, LookupEmptyTree) {
+    expectValid();
+    sds s = createString("anything");
+    EXPECT_LT(fbtreeGetRankOfItem(fbt, s), 0);
+    sdsfree(s);
 }
 
-TEST(FbtreeTest, length_increments) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-
-    sds str1 = createString("first");
-    fbtreeInsert(fbt, str1);
-    TEST_ASSERT(fbtreeLength(fbt) == 1);
-
-    sds str2 = createString("second");
-    fbtreeInsert(fbt, str2);
-    TEST_ASSERT(fbtreeLength(fbt) == 2);
-
-    sds str3 = createString("third");
-    fbtreeInsert(fbt, str3);
-    TEST_ASSERT(fbtreeLength(fbt) == 3);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+TEST_F(FbtreeTest, LengthIncrements) {
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    insert("first");
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
+    insert("second");
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    insert("third");
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
 }
 
-/* ========== Forward Iterator Tests ========== */
+TEST_F(FbtreeTest, DuplicateInsert) {
+    sds ins1 = insert("key");
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
 
-TEST(FbtreeTest, iterator_small) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+    sds ins2 = insert("key");
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    expectValid();
 
-    const char *strings[] = {"dog", "cat", "ant", "bat"};
-    for (int i = 0; i < 4; i++) {
-        sds str = createString(strings[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "ant", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "bat", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "cat", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "dog", 4) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, ins1), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, ins2), 0);
 }
 
-TEST(FbtreeTest, iterator_full_leaf) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Insert NODE_CAPACITY+1 items to exceed single leaf */
-    const int count = TEST_NODE_CAPACITY + 1;
-    char buf[8];
-    for (int i = 0; i < count; i++) {
-        snprintf(buf, sizeof(buf), "k%02d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    /* Verify all items in sorted order */
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    const_sds pos;
-    for (int i = 0; i < count; i++) {
-        snprintf(buf, sizeof(buf), "k%02d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(sdslen(pos) == 4);
-        TEST_ASSERT(memcmp(pos, buf, 4) == 0);
-    }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+TEST_F(FbtreeTest, EmptyString) {
+    sds inserted = insert("");
+    expectValid();
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
 }
 
-TEST(FbtreeTest, iterator_reverse_insert) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Insert in reverse order */
-    const int count = TEST_NODE_CAPACITY + 1;
-    char buf[8];
-    for (int i = count - 1; i >= 0; i--) {
-        snprintf(buf, sizeof(buf), "k%02d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    /* Iteration should still be sorted ascending */
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    const_sds pos;
-    for (int i = 0; i < count; i++) {
-        snprintf(buf, sizeof(buf), "k%02d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(sdslen(pos) == 4);
-        TEST_ASSERT(memcmp(pos, buf, 4) == 0);
-    }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-}
-
-TEST(FbtreeTest, iterator_empty) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    /* Next on empty tree returns false */
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    const_sds pos;
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-}
-
-TEST(FbtreeTest, iterator_reset_invalidates) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    const char *strings[] = {"a", "b", "c"};
-    for (int i = 0; i < 3; i++) {
-        sds str = createString(strings[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-
-    fbtreeResetIterator(&it);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-}
-
-/* ========== Duplicate and Edge Case Tests ========== */
-
-TEST(FbtreeTest, duplicate_insert) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str1 = createString("key");
-    sds inserted1 = fbtreeInsert(fbt, str1);
-    TEST_ASSERT(fbtreeLength(fbt) == 1);
-
-    /* Duplicates are allowed - both stored separately */
-    sds str2 = createString("key");
-    sds inserted2 = fbtreeInsert(fbt, str2);
-    TEST_ASSERT(fbtreeLength(fbt) == 2);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted1) >= 0);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted2) >= 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-}
-
-TEST(FbtreeTest, empty_string) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("");
-    sds inserted = fbtreeInsert(fbt, str);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted) >= 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
-}
-
-TEST(FbtreeTest, long_strings) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, LongStrings) {
     char long_str[256];
     memset(long_str, 'a', 255);
     long_str[255] = '\0';
 
-    sds str = createString(long_str);
-    sds inserted = fbtreeInsert(fbt, str);
-    TEST_ASSERT(is_tree_valid(fbt));
+    sds inserted = insert(long_str);
+    expectValid();
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
+}
 
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted) >= 0);
+/* Binary data with embedded null bytes - sds handles this, tree should too. */
+TEST_F(FbtreeTest, BinaryDataWithNullBytes) {
+    /* Create sds with embedded nulls: "ab\0cd\0ef" */
+    char data1[] = {'a', 'b', '\0', 'c', 'd', '\0', 'e', 'f'};
+    char data2[] = {'a', 'b', '\0', 'c', 'e', '\0', 'e', 'f'}; /* differs at byte 4 */
+    char data3[] = {'a', 'b', '\0', 'c', 'd', '\0', 'e', 'g'}; /* differs at byte 7 */
 
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    sds s1 = fbtreeInsert(fbt, sdsnewlen(data1, sizeof(data1)));
+    sds s2 = fbtreeInsert(fbt, sdsnewlen(data2, sizeof(data2)));
+    sds s3 = fbtreeInsert(fbt, sdsnewlen(data3, sizeof(data3)));
+    expectValid();
+
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, s1), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, s2), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, s3), 0);
+
+    /* Verify sorted order via iteration */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    const_sds prev = nullptr;
+    int count = 0;
+    while (fbtreeNext(&it, &pos)) {
+        if (prev) {
+            EXPECT_LT(sdscmp(prev, pos), 0);
+        }
+        prev = pos;
+        count++;
+    }
+    EXPECT_EQ(count, 3);
+}
+
+/* ========== Forward Iterator Tests ========== */
+
+TEST_F(FbtreeTest, IteratorSmall) {
+    const char *strings[] = {"dog", "cat", "ant", "bat"};
+    for (auto s : strings) insert(s);
+    expectValid();
+
+    auto items = collectForward();
+    ASSERT_EQ(items.size(), 4u);
+    EXPECT_EQ(items[0], std::string("ant\0", 4));
+    EXPECT_EQ(items[1], std::string("bat\0", 4));
+    EXPECT_EQ(items[2], std::string("cat\0", 4));
+    EXPECT_EQ(items[3], std::string("dog\0", 4));
+}
+
+TEST_F(FbtreeTest, IteratorFullLeaf) {
+    const int count = TEST_NODE_CAPACITY + 1;
+    char buf[8];
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "k%02d", i);
+        insert(buf);
+    }
+    expectValid();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "k%02d", i);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(sdslen(pos), 4u);
+        EXPECT_EQ(memcmp(pos, buf, 4), 0);
+    }
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+}
+
+TEST_F(FbtreeTest, IteratorReverseInsert) {
+    const int count = TEST_NODE_CAPACITY + 1;
+    char buf[8];
+    for (int i = count - 1; i >= 0; i--) {
+        snprintf(buf, sizeof(buf), "k%02d", i);
+        insert(buf);
+    }
+    expectValid();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "k%02d", i);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 4), 0);
+    }
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+}
+
+TEST_F(FbtreeTest, IteratorEmpty) {
+    expectValid();
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+}
+
+TEST_F(FbtreeTest, IteratorResetInvalidates) {
+    for (auto s : {"a", "b", "c"}) insert(s);
+    expectValid();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+
+    fbtreeResetIterator(&it);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
 /* ========== Ordering Tests ========== */
 
-TEST(FbtreeTest, multilevel_reverse_insert) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, MultilevelReverseInsert) {
     char buf[8];
     for (int i = 95; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i <= 95; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, 5) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 5), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     fbtreeInitIterator(&it, fbt);
     for (int i = 95; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(fbtreePrev(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, 5) == 0);
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 5), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, prefix_ordering) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, PrefixOrdering) {
     const char *strings[] = {"elderberry", "elder", "e", "elderly"};
-    for (int i = 0; i < 4; i++) {
-        sds str = createString(strings[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
+    for (auto s : strings) insert(s);
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "e", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "elder", 6) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "elderberry", 11) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "elderly", 8) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "e", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "elder", 6), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "elderberry", 11), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "elderly", 8), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, same_length_ordering) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SameLengthOrdering) {
     const char *strings[] = {"zoo", "abc", "xyz", "def"};
-    for (int i = 0; i < 4; i++) {
-        sds str = createString(strings[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
+    for (auto s : strings) insert(s);
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "abc", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "def", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "xyz", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "zoo", 4) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "abc", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "def", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "xyz", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "zoo", 4), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, common_prefix_ordering) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    const char *keys[] = {
-        "prefix_aaa", "prefix_aab", "prefix_aac", "prefix_aad",
-        "prefix_baa", "prefix_bab", "prefix_bac", "prefix_bad",
-        "prefix_caa", "prefix_cab", "prefix_cac", "prefix_cad"};
+TEST_F(FbtreeTest, CommonPrefixOrdering) {
+    const char *keys[] = {"prefix_aaa", "prefix_aab", "prefix_aac", "prefix_aad",
+                          "prefix_baa", "prefix_bab", "prefix_bac", "prefix_bad",
+                          "prefix_caa", "prefix_cab", "prefix_cac", "prefix_cad"};
     sds inserted[12];
     for (int i = 0; i < 12; i++) {
-        sds str = createString(keys[i]);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(keys[i]);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     for (int i = 0; i < 12; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < 12; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
         size_t len = strlen(keys[i]) + 1;
-        TEST_ASSERT(memcmp(pos, keys[i], len) == 0);
+        EXPECT_EQ(memcmp(pos, keys[i], len), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, insert_batches_sorted) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    const char *batch1[] = {"dog", "cat", "ant"};
-    for (int i = 0; i < 3; i++) {
-        sds str = createString(batch1[i]);
-        fbtreeInsert(fbt, str);
-    }
+TEST_F(FbtreeTest, InsertBatchesSorted) {
+    for (auto s : {"dog", "cat", "ant"}) insert(s);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "ant", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "cat", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "dog", 4) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "ant", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cat", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "dog", 4), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Insert second batch (interleaves with first) */
-    const char *batch2[] = {"bat", "elk"};
-    for (int i = 0; i < 2; i++) {
-        sds str = createString(batch2[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
+    for (auto s : {"bat", "elk"}) insert(s);
+    expectValid();
 
     fbtreeInitIterator(&it, fbt);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "ant", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "bat", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "cat", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "dog", 4) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "elk", 4) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "ant", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "bat", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cat", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "dog", 4), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "elk", 4), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, insert_at_boundaries) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("m");
-    fbtreeInsert(fbt, str);
-
-    const char *inserts[] = {"a", "z", "n"};
-    for (int i = 0; i < 3; i++) {
-        str = createString(inserts[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
+TEST_F(FbtreeTest, InsertAtBoundaries) {
+    insert("m");
+    for (auto s : {"a", "z", "n"}) insert(s);
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "a", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "m", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "n", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "z", 2) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "a", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "m", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "n", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "z", 2), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
 /* ========== Backward Iterator (Prev) Tests ========== */
 
-TEST(FbtreeTest, prev_small) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, PrevSmall) {
     const char *strings[] = {"dog", "cat", "ant", "bat"};
-    for (int i = 0; i < 4; i++) {
-        sds str = createString(strings[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
+    for (auto s : strings) insert(s);
+    expectValid();
 
-    /* Iterate backward from end - descending order */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "dog", 4) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "cat", 4) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "bat", 4) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "ant", 4) == 0);
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "dog", 4), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cat", 4), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "bat", 4), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "ant", 4), 0);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, prev_full_leaf) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, PrevFullLeaf) {
     const int count = TEST_NODE_CAPACITY + 1;
     char buf[8];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = count - 1; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%02d", i);
-        TEST_ASSERT(fbtreePrev(&it, &pos));
-        TEST_ASSERT(sdslen(pos) == 4);
-        TEST_ASSERT(memcmp(pos, buf, 4) == 0);
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 4), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, prev_empty) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-    TEST_ASSERT(is_tree_valid(fbt));
-
+TEST_F(FbtreeTest, PrevEmpty) {
+    expectValid();
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, prev_next_mixed) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    const char *strings[] = {"a", "b", "c", "d", "e"};
-    for (int i = 0; i < 5; i++) {
-        sds str = createString(strings[i]);
-        fbtreeInsert(fbt, str);
-    }
-    TEST_ASSERT(is_tree_valid(fbt));
+TEST_F(FbtreeTest, PrevNextMixed) {
+    for (auto s : {"a", "b", "c", "d", "e"}) insert(s);
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Forward then backward - prev returns current before moving */
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "a", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "b", 2) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "b", 2) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "a", 2) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "a", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "b", 2), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "b", 2), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "a", 2), 0);
 
-    /* Can resume forward */
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "a", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "b", 2) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "c", 2) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "c", 2) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "b", 2) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "a", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "b", 2), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "c", 2), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "c", 2), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "b", 2), 0);
 }
 
-TEST(FbtreeTest, prev_single) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("only");
-    fbtreeInsert(fbt, str);
-    TEST_ASSERT(is_tree_valid(fbt));
+TEST_F(FbtreeTest, PrevSingle) {
+    insert("only");
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreePrev(&it, &pos) && memcmp(pos, "only", 5) == 0);
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "only", 5), 0);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, iterator_exhausted_stays_invalid) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("x");
-    fbtreeInsert(fbt, str);
-    TEST_ASSERT(is_tree_valid(fbt));
+TEST_F(FbtreeTest, IteratorExhaustedStaysInvalid) {
+    insert("x");
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
     /* Exhaust forward - repeated calls stay false */
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
     /* Can't reverse from exhausted state */
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 
     /* Exhaust backward - same behavior */
     fbtreeInitIterator(&it, fbt);
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Ensure we can reverse from last item, but not after exhausting */
+    /* Can reverse from last item, but not after exhausting */
     fbtreeInitIterator(&it, fbt);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 
-    /* Same for first item - can move forward from first, but not after exhausting */
+    /* Same for first item */
     fbtreeInitIterator(&it, fbt);
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
 /* ========== Multi-Level Tree Tests ========== */
 
-TEST(FbtreeTest, multilevel_lookup) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, MultilevelLookup) {
     const int count = TEST_NODE_CAPACITY + 1;
     char buf[8];
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
-    sds search_str1 = createString("k99");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search_str1) < 0);
-    sdsfree(search_str1);
-    sds search_str2 = createString("x00");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search_str2) < 0);
-    sdsfree(search_str2);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    sds s1 = createString("k99");
+    EXPECT_LT(fbtreeGetRankOfItem(fbt, s1), 0);
+    sdsfree(s1);
+    sds s2 = createString("x00");
+    EXPECT_LT(fbtreeGetRankOfItem(fbt, s2), 0);
+    sdsfree(s2);
 }
 
-TEST(FbtreeTest, multilevel_forward_iteration) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* 3.5x node capacity creates multi-level tree with multiple leaves */
+TEST_F(FbtreeTest, MultilevelForwardIteration) {
     const int count = TEST_NODE_CAPACITY * 7 / 2;
     char buf[8];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Forward iteration visits all items in order */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, 5) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 5), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, multilevel_backward_iteration) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* 3.5x node capacity creates multi-level tree */
+TEST_F(FbtreeTest, MultilevelBackwardIteration) {
     const int count = TEST_NODE_CAPACITY * 7 / 2;
     char buf[8];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Backward iteration visits all items in reverse order */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = count - 1; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(fbtreePrev(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, 5) == 0);
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 5), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, multilevel_mixed_iteration) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* 3.5x node capacity */
+TEST_F(FbtreeTest, MultilevelMixedIteration) {
     const int total = TEST_NODE_CAPACITY * 7 / 2;
     char buf[8];
     for (int i = 0; i < total; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)total);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)total);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Forward 10 items: lands on k009 */
     for (int i = 0; i < 10; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
     }
-    TEST_ASSERT(sdslen(pos) == 5);
-    TEST_ASSERT(memcmp(pos, "k009", 5) == 0);
+    EXPECT_EQ(memcmp(pos, "k009", 5), 0);
 
-    /* Backward 5 items: lands on k005 */
     for (int i = 0; i < 5; i++) {
-        TEST_ASSERT(fbtreePrev(&it, &pos));
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
     }
-    TEST_ASSERT(sdslen(pos) == 5);
-    TEST_ASSERT(memcmp(pos, "k005", 5) == 0);
+    EXPECT_EQ(memcmp(pos, "k005", 5), 0);
 
-    /* Forward to end */
     int count = 1;
     while (fbtreeNext(&it, &pos)) count++;
-    TEST_ASSERT(count == total - 5 + 1); /* from k005 to end */
+    EXPECT_EQ(count, total - 5 + 1);
     snprintf(buf, sizeof(buf), "k%03d", total - 1);
-    TEST_ASSERT(memcmp(pos, buf, 5) == 0);
+    EXPECT_EQ(memcmp(pos, buf, 5), 0);
 
     fbtreeResetIterator(&it);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, multilevel_cross_leaf_iteration) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* 200 items ensures multiple leaves */
+TEST_F(FbtreeTest, MultilevelCrossLeafIteration) {
     char buf[8];
     for (int i = 0; i < 200; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Skip to near first leaf boundary (at TEST_NODE_CAPACITY with asymmetric splits) */
     const int boundary = TEST_NODE_CAPACITY;
     for (int i = 0; i < boundary - 5; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
     }
 
-    /* Verify items around leaf boundary are correct */
     for (int i = boundary - 5; i < boundary + 5; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, 5) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, 5), 0);
     }
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
 /* ========== Inner Node Split Tests (3+ Level Trees) ========== */
 
-TEST(FbtreeTest, inner_split_sequential) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Insert enough items to force inner node splits and create 3+ level tree */
-    /* Sequential pattern stresses append pattern insertion shortcut and asymmetric node splits */
+TEST_F(FbtreeTest, InnerSplitSequential) {
     const int count = TEST_THREE_LEVEL_ITEMS;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
         sds str = createBase26TestString("key_", "", i, 3);
         inserted[i] = fbtreeInsert(fbt, str);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
-    /* All items findable */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
-    /* Verify all items exist and iteration is sorted */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < count; i++) {
         sds expected = createBase26TestString("key_", "", i, 3);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(sdscmp(pos, expected) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(sdscmp(pos, expected), 0);
         sdsfree(expected);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, inner_split_reverse) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Reverse insertion stresses prepend pattern insertion shortcut and asymmetric node splits */
+TEST_F(FbtreeTest, InnerSplitReverse) {
     const int count = TEST_THREE_LEVEL_ITEMS;
     char buf[16];
     for (int i = count - 1; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "key_%05d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
-    /* Forward iteration still sorted */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "key_%05d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Backward iteration also works */
     fbtreeInitIterator(&it, fbt);
     for (int i = count - 1; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "key_%05d", i);
-        TEST_ASSERT(fbtreePrev(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, inner_split_shuffled) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Shuffle indices for random insertion */
-    /* Random insertion stresses normal mid-collection insertion path and symmetric 50/50 node splits */
+TEST_F(FbtreeTest, InnerSplitShuffled) {
     int *indices = (int *)zmalloc(5000 * sizeof(int));
-    for (int i = 0; i < 5000; i++) {
-        indices[i] = i;
-    }
+    for (int i = 0; i < 5000; i++) indices[i] = i;
     for (int i = 4999; i > 0; i--) {
-        int j = i % 1000; /* Simple pseudo-random swap */
+        int j = i % 1000;
         int temp = indices[i];
         indices[i] = indices[j];
         indices[j] = temp;
     }
 
-    /* Insert in shuffled order */
     char buf[16];
     for (int i = 0; i < 5000; i++) {
         snprintf(buf, sizeof(buf), "rnd_%05d", indices[i]);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == 5000);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 5000u);
 
-    /* Verify all items exist and iteration is sorted */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < 5000; i++) {
         snprintf(buf, sizeof(buf), "rnd_%05d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     zfree(indices);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
 /* ========== Deep Tree Tests (4+ Levels) ========== */
 
-TEST(FbtreeTest, deep_tree_4_levels) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Ensure 4+ level tree by exceeding NODE_CAPACITY^3 */
+TEST_F(FbtreeTest, DeepTree4Levels) {
     const int count = TEST_NODE_CAPACITY * TEST_NODE_CAPACITY * TEST_NODE_CAPACITY + 10000;
     char buf[16];
     sds first_item = NULL, middle_item = NULL, last_item = NULL;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "deep_%06d", i);
-        sds str = createString(buf);
-        sds inserted = fbtreeInsert(fbt, str);
+        sds inserted = insert(buf);
         if (i == 0)
             first_item = inserted;
         else if (i == count / 2)
@@ -1020,64 +824,44 @@ TEST(FbtreeTest, deep_tree_4_levels) {
         else if (i == count - 1)
             last_item = inserted;
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
-    /* Lookups at first, middle, last */
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, first_item) >= 0);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, middle_item) >= 0);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, last_item) >= 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, first_item), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, middle_item), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, last_item), 0);
 
-    /* Non-existent item */
     sds search_str = createString("deep_300000");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search_str) < 0);
+    EXPECT_LT(fbtreeGetRankOfItem(fbt, search_str), 0);
     sdsfree(search_str);
 
-    /* Iteration across deep tree boundaries */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-
-    /* Skip to middle */
     for (int i = 0; i < count / 2; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
     }
-
-    /* Verify next 100 items */
     for (int i = count / 2; i < count / 2 + 100; i++) {
         snprintf(buf, sizeof(buf), "deep_%06d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
-TEST(FbtreeTest, deep_tree_mixed_insert_patterns) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
 
+TEST_F(FbtreeTest, DeepTreeMixedInsertPatterns) {
     char buf[16];
 
-    /* Batch 1: sequential (items 0, 3, 6, 9, ...) */
     for (int i = 0; i < 10000; i++) {
         snprintf(buf, sizeof(buf), "mix_%06d", i * 3);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-
-    /* Batch 2: reverse (items 1, 4, 7, 10, ...) */
     for (int i = 9999; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "mix_%06d", i * 3 + 1);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
 
-    /* Batch 3: shuffled (items 2, 5, 8, 11, ...) */
     int *indices = (int *)zmalloc(10000 * sizeof(int));
-    for (int i = 0; i < 10000; i++) {
-        indices[i] = i * 3 + 2;
-    }
+    for (int i = 0; i < 10000; i++) indices[i] = i * 3 + 2;
     for (int i = 9999; i > 0; i--) {
         int j = (i * 17) % (i + 1);
         int temp = indices[i];
@@ -1086,86 +870,62 @@ TEST(FbtreeTest, deep_tree_mixed_insert_patterns) {
     }
     for (int i = 0; i < 10000; i++) {
         snprintf(buf, sizeof(buf), "mix_%06d", indices[i]);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
     zfree(indices);
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == 30000);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 30000u);
 
-    /* All 30k items in sorted order */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < 30000; i++) {
         snprintf(buf, sizeof(buf), "mix_%06d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Test mixed forward/backward iteration in deep tree */
     fbtreeInitIterator(&it, fbt);
-
-    /* Forward 1000 */
     for (int i = 0; i < 1000; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
     }
-
-    /* Backward 500 - lands on item 500 */
     for (int i = 0; i < 500; i++) {
-        TEST_ASSERT(fbtreePrev(&it, &pos));
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
     }
     snprintf(buf, sizeof(buf), "mix_%06d", 500);
-    TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
 }
 
 /* ========== String Pattern Tests ========== */
 
-TEST(FbtreeTest, varied_string_patterns) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, VariedStringPatterns) {
     char buf[32];
     sds *inserted = (sds *)zmalloc(4000 * sizeof(sds));
     int idx = 0;
 
-    /* Pattern 1: Common prefix, varying suffix */
     for (int i = 0; i < 1000; i++) {
         snprintf(buf, sizeof(buf), "common_prefix_%04d_suffix", i);
-        sds str = createString(buf);
-        inserted[idx++] = fbtreeInsert(fbt, str);
+        inserted[idx++] = insert(buf);
     }
-
-    /* Pattern 2: Varying prefix, common suffix */
     for (int i = 0; i < 1000; i++) {
         snprintf(buf, sizeof(buf), "prefix_%04d_common_suffix", i);
-        sds str = createString(buf);
-        inserted[idx++] = fbtreeInsert(fbt, str);
+        inserted[idx++] = insert(buf);
     }
-
-    /* Pattern 3: Palindromic */
     for (int i = 0; i < 1000; i++) {
         snprintf(buf, sizeof(buf), "pal_%04d_%04d_lap", i, i);
-        sds str = createString(buf);
-        inserted[idx++] = fbtreeInsert(fbt, str);
+        inserted[idx++] = insert(buf);
     }
-
-    /* Pattern 4: Repeated characters */
     for (int i = 0; i < 1000; i++) {
         char c = 'a' + (i % 26);
         snprintf(buf, sizeof(buf), "repeat_%c%c%c%c_%04d", c, c, c, c, i);
-        sds str = createString(buf);
-        inserted[idx++] = fbtreeInsert(fbt, str);
+        inserted[idx++] = insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == 4000);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 4000u);
 
     for (int i = 0; i < 4000; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
@@ -1173,73 +933,49 @@ TEST(FbtreeTest, varied_string_patterns) {
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     const_sds prev_pos = NULL;
-    for (int i = 0; i < 4000; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+    int count = 0;
+    while (fbtreeNext(&it, &pos)) {
         if (prev_pos) {
-            TEST_ASSERT(sdscmp(prev_pos, pos) <= 0);
+            EXPECT_LE(sdscmp(prev_pos, pos), 0);
         }
         prev_pos = pos;
+        count++;
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(count, 4000);
 }
 
 /* ========== Split Boundary Tests ========== */
 
-TEST(FbtreeTest, split_at_exact_boundary) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SplitAtExactBoundary) {
     char buf[16];
     const int count = TEST_TWO_LEVEL_ITEMS;
 
-    /* Insert NODE_CAPACITY^2 items - with optimized append path, this creates fully packed nodes */
-    /* This should create exactly a 2-level tree with the final item triggering inner node split */
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "bound_%05d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
 
-    /* Add one more to force inner node split */
     snprintf(buf, sizeof(buf), "bound_%05d", count);
-    sds str = createString(buf);
-    sds boundary_item = fbtreeInsert(fbt, str);
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)(count + 1));
+    sds boundary_item = insert(buf);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)(count + 1));
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, boundary_item), 0);
 
-    /* The boundary item is findable */
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, boundary_item) >= 0);
-
-    /* Iteration across split boundary */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-
-    /* Skip to near boundary */
     for (int i = 0; i < count - 6; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
     }
-
-    /* Verify items around split boundary */
     for (int i = count - 6; i <= count; i++) {
         snprintf(buf, sizeof(buf), "bound_%05d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, alternating_min_max_insert) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Alternating min/max insertion stresses split boundaries */
+TEST_F(FbtreeTest, AlternatingMinMaxInsert) {
     const int count = TEST_TWO_LEVEL_ITEMS;
     char buf[16];
     int min_val = 0, max_val = count - 1;
@@ -1247,57 +983,43 @@ TEST(FbtreeTest, alternating_min_max_insert) {
 
     while (min_val <= max_val) {
         snprintf(buf, sizeof(buf), "mid_%06d", min_val);
-        sds str = createString(buf);
-        inserted[min_val] = fbtreeInsert(fbt, str);
+        inserted[min_val] = insert(buf);
         min_val++;
-
         if (min_val > max_val) break;
         snprintf(buf, sizeof(buf), "mid_%06d", max_val);
-        str = createString(buf);
-        inserted[max_val] = fbtreeInsert(fbt, str);
+        inserted[max_val] = insert(buf);
         max_val--;
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
-    /* All items findable */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
-    /* Forward iteration */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
         snprintf(buf, sizeof(buf), "mid_%06d", i);
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Reverse iteration */
     fbtreeInitIterator(&it, fbt);
     for (int i = count - 1; i >= 0; i--) {
-        TEST_ASSERT(fbtreePrev(&it, &pos));
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
         snprintf(buf, sizeof(buf), "mid_%06d", i);
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-/* Sequential insertion into middle of tree can still trigger optimized append/prepend paths
- * when the insertion point becomes the new rightmost/leftmost position in a subtree */
-TEST(FbtreeTest, sequential_middle_insert) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+TEST_F(FbtreeTest, SequentialMiddleInsert) {
     char buf[16];
 
-    /* Create tree with gap: [0-999] and [3000-3999] */
     for (int i = 0; i < 1000; i++) {
         snprintf(buf, sizeof(buf), "seq_%06d", i);
         fbtreeInsert(fbt, createString(buf));
@@ -1306,186 +1028,129 @@ TEST(FbtreeTest, sequential_middle_insert) {
         snprintf(buf, sizeof(buf), "seq_%06d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == 2000);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 2000u);
 
-    /* Fill gap with ascending sequence [1000-1999] (append pattern into middle) */
     for (int i = 1000; i < 2000; i++) {
         snprintf(buf, sizeof(buf), "seq_%06d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == 3000);
+    expectValid();
 
-    /* Fill remaining gap with descending sequence [2999-2000] (prepend pattern into middle) */
     for (int i = 2999; i >= 2000; i--) {
         snprintf(buf, sizeof(buf), "seq_%06d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == 4000);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), 4000u);
 
-    /* All 4000 items in order */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < 4000; i++) {
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
         snprintf(buf, sizeof(buf), "seq_%06d", i);
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
 /* ========== Delete Tests ========== */
 
-TEST(FbtreeTest, delete_single_item) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+TEST_F(FbtreeTest, DeleteSingleItem) {
+    sds inserted = insert("test");
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
 
-    sds str = createString("test");
-    sds inserted = fbtreeInsert(fbt, str);
-    TEST_ASSERT(fbtreeLength(fbt) == 1);
-
-    TEST_ASSERT(fbtreeDelete(fbt, inserted));
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_TRUE(fbtreeDelete(fbt, inserted));
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
 }
 
-TEST(FbtreeTest, delete_nonexistent) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("exists");
-    sds inserted = fbtreeInsert(fbt, str);
+TEST_F(FbtreeTest, DeleteNonexistent) {
+    sds inserted = insert("exists");
 
     sds other = createString("missing");
-    TEST_ASSERT(!fbtreeDelete(fbt, other));
+    EXPECT_FALSE(fbtreeDelete(fbt, other));
     sdsfree(other);
 
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted) >= 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
 }
 
-TEST(FbtreeTest, delete_from_empty) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, DeleteFromEmpty) {
     sds dummy = createString("anything");
-    TEST_ASSERT(!fbtreeDelete(fbt, dummy));
+    EXPECT_FALSE(fbtreeDelete(fbt, dummy));
     sdsfree(dummy);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, delete_all_items) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, DeleteAllItems) {
     char buf[8];
     sds inserted[10];
     for (int i = 0; i < 10; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 10);
+    EXPECT_EQ(fbtreeLength(fbt), 10u);
 
     for (int i = 0; i < 10; i++) {
-        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
-        TEST_ASSERT(fbtreeLength(fbt) == 10UL - i - 1UL);
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+        EXPECT_EQ(fbtreeLength(fbt), 10u - i - 1u);
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-    TEST_ASSERT(is_tree_valid(fbt));
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
 
-    /* Verify leaf caches cleared - iterators return false on empty tree */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
     fbtreeInitIterator(&it, fbt);
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, delete_middle_item) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, DeleteMiddleItem) {
     char buf[8];
     sds inserted[50];
     for (int i = 0; i < 50; i++) {
         snprintf(buf, sizeof(buf), "k%02d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 50);
 
-    TEST_ASSERT(fbtreeDelete(fbt, inserted[25]));
-    TEST_ASSERT(fbtreeLength(fbt) == 49);
-
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[24]) >= 0);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[26]) >= 0);
+    EXPECT_TRUE(fbtreeDelete(fbt, inserted[25]));
+    EXPECT_EQ(fbtreeLength(fbt), 49u);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[24]), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[26]), 0);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     int count = 0;
     while (fbtreeNext(&it, &pos)) count++;
-    TEST_ASSERT(count == 49);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(count, 49);
+    expectValid();
 }
 
-TEST(FbtreeTest, delete_max_updates_anchor) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, DeleteMaxUpdatesAnchor) {
     char buf[16];
     sds inserted[200];
     for (int i = 0; i < 200; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 200);
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    TEST_ASSERT(fbtreeDelete(fbt, inserted[199]));
-    TEST_ASSERT(fbtreeLength(fbt) == 199);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[198]) >= 0);
+    EXPECT_TRUE(fbtreeDelete(fbt, inserted[199]));
+    EXPECT_EQ(fbtreeLength(fbt), 199u);
+    expectValid();
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[198]), 0);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     int count = 0;
     while (fbtreePrev(&it, &pos)) count++;
-    TEST_ASSERT(count == 199);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(count, 199);
 }
 
-TEST(FbtreeTest, delete_all_multilevel) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create multi-level tree */
+TEST_F(FbtreeTest, DeleteAllMultilevel) {
     char buf[16];
     const int count = TEST_NODE_CAPACITY * 3;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
@@ -1493,27 +1158,18 @@ TEST(FbtreeTest, delete_all_multilevel) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
         inserted[i] = fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Delete all items - exercises empty node removal */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
-        TEST_ASSERT(is_tree_valid(fbt));
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+        expectValid();
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
 
     zfree(inserted);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, delete_root_collapse) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create 2-level tree: root inner node with 2 leaf children */
+TEST_F(FbtreeTest, DeleteRootCollapse) {
     char buf[16];
     const int overflow = 10;
     const int count = TEST_NODE_CAPACITY + overflow;
@@ -1522,33 +1178,25 @@ TEST(FbtreeTest, delete_root_collapse) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
         inserted[i] = fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Delete items from first leaf until it's empty - triggers root collapse */
     for (int i = 0; i < TEST_NODE_CAPACITY; i++) {
-        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)overflow);
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)overflow);
 
-    /* Tree should still work after collapse */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     int remaining = 0;
     while (fbtreeNext(&it, &pos)) remaining++;
-    TEST_ASSERT(remaining == overflow);
+    EXPECT_EQ(remaining, overflow);
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, delete_leftmost_leaf_updates_cache) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create multi-level tree */
+TEST_F(FbtreeTest, DeleteLeftmostLeafUpdatesCache) {
     char buf[16];
     const int count = TEST_NODE_CAPACITY * 3;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
@@ -1557,31 +1205,22 @@ TEST(FbtreeTest, delete_leftmost_leaf_updates_cache) {
         inserted[i] = fbtreeInsert(fbt, createString(buf));
     }
 
-    /* Delete all items from the first leaf */
     for (int i = 0; i < TEST_NODE_CAPACITY; i++) {
-        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Forward iteration should still work - leftmost_leaf must be valid */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    /* First remaining item should be key_061 */
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
     snprintf(buf, sizeof(buf), "key_%03d", TEST_NODE_CAPACITY);
-    TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+    EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, delete_rightmost_leaf_updates_cache) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create multi-level tree */
+TEST_F(FbtreeTest, DeleteRightmostLeafUpdatesCache) {
     char buf[16];
     const int count = TEST_NODE_CAPACITY * 3;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
@@ -1590,222 +1229,274 @@ TEST(FbtreeTest, delete_rightmost_leaf_updates_cache) {
         inserted[i] = fbtreeInsert(fbt, createString(buf));
     }
 
-    /* Delete all items from the last leaf (items from end backwards) */
     for (int i = count - 1; i >= count - TEST_NODE_CAPACITY; i--) {
-        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Backward iteration should still work - rightmost_leaf must be valid */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    /* Last remaining item */
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
     snprintf(buf, sizeof(buf), "key_%03d", count - TEST_NODE_CAPACITY - 1);
-    TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+    EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+/* Delete in reverse order - stresses different anchor-update paths than forward delete. */
+TEST_F(FbtreeTest, DeleteReverseOrder) {
+    char buf[16];
+    const int count = TEST_NODE_CAPACITY * 3;
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Delete from highest to lowest */
+    for (int i = count - 1; i >= 0; i--) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+        expectValid();
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+
+    zfree(inserted);
+}
+
+/* Interleaved insert and delete - exercises tree after structural changes from deletion. */
+TEST_F(FbtreeTest, InterleavedInsertDelete) {
+    char buf[16];
+    const int batch = 100;
+    sds *inserted = (sds *)zmalloc(batch * sizeof(sds));
+
+    /* Insert first batch */
+    for (int i = 0; i < batch; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Delete even-indexed items */
+    for (int i = 0; i < batch; i += 2) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 50u);
+    expectValid();
+
+    /* Insert new items into the gaps */
+    sds *new_inserted = (sds *)zmalloc(batch * sizeof(sds));
+    for (int i = 0; i < batch; i++) {
+        snprintf(buf, sizeof(buf), "new_%03d", i);
+        new_inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 150u);
+    expectValid();
+
+    /* Verify all remaining items are findable */
+    for (int i = 1; i < batch; i += 2) {
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+    }
+    for (int i = 0; i < batch; i++) {
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, new_inserted[i]), 0);
+    }
+
+    /* Verify sorted iteration */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    const_sds prev_pos = nullptr;
+    int count = 0;
+    while (fbtreeNext(&it, &pos)) {
+        if (prev_pos) {
+            EXPECT_LT(sdscmp(prev_pos, pos), 0);
+        }
+        prev_pos = pos;
+        count++;
+    }
+    EXPECT_EQ(count, 150);
+
+    zfree(inserted);
+    zfree(new_inserted);
 }
 
 /* ========== Rank Tests ========== */
 
-TEST(FbtreeTest, rank_single_leaf) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, RankSingleLeaf) {
     const char *items[] = {"cherry", "apple", "banana", "date"};
-    for (int i = 0; i < 4; i++) {
-        sds str = createString(items[i]);
-        fbtreeInsert(fbt, str);
-    }
+    for (auto s : items) insert(s);
 
     /* Sorted order: apple(0), banana(1), cherry(2), date(3) */
     const_sds result = fbtreeGetAtRank(fbt, 0);
-    TEST_ASSERT(result && memcmp(result, "apple", 6) == 0);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(memcmp(result, "apple", 6), 0);
 
     result = fbtreeGetAtRank(fbt, 1);
-    TEST_ASSERT(result && memcmp(result, "banana", 7) == 0);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(memcmp(result, "banana", 7), 0);
 
     result = fbtreeGetAtRank(fbt, 2);
-    TEST_ASSERT(result && memcmp(result, "cherry", 7) == 0);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(memcmp(result, "cherry", 7), 0);
 
     result = fbtreeGetAtRank(fbt, 3);
-    TEST_ASSERT(result && memcmp(result, "date", 5) == 0);
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(memcmp(result, "date", 5), 0);
 
-    /* Out of bounds returns NULL */
-    result = fbtreeGetAtRank(fbt, 4);
-    TEST_ASSERT(result == NULL);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreeGetAtRank(fbt, 4), nullptr);
 }
 
-TEST(FbtreeTest, rank_multilevel) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, RankMultilevel) {
     char buf[16];
     for (int i = 0; i < 200; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    const_sds result;
-
-    result = fbtreeGetAtRank(fbt, 0);
-    TEST_ASSERT(result && memcmp(result, "key_000", 8) == 0);
-
-    result = fbtreeGetAtRank(fbt, 50);
-    TEST_ASSERT(result && memcmp(result, "key_050", 8) == 0);
-
-    result = fbtreeGetAtRank(fbt, 100);
-    TEST_ASSERT(result && memcmp(result, "key_100", 8) == 0);
-
-    result = fbtreeGetAtRank(fbt, 199);
-    TEST_ASSERT(result && memcmp(result, "key_199", 8) == 0);
-
-    result = fbtreeGetAtRank(fbt, 200);
-    TEST_ASSERT(result == NULL);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(memcmp(fbtreeGetAtRank(fbt, 0), "key_000", 8), 0);
+    EXPECT_EQ(memcmp(fbtreeGetAtRank(fbt, 50), "key_050", 8), 0);
+    EXPECT_EQ(memcmp(fbtreeGetAtRank(fbt, 100), "key_100", 8), 0);
+    EXPECT_EQ(memcmp(fbtreeGetAtRank(fbt, 199), "key_199", 8), 0);
+    EXPECT_EQ(fbtreeGetAtRank(fbt, 200), nullptr);
 }
 
-TEST(FbtreeTest, rank_after_delete) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, RankAfterDelete) {
     char buf[16];
     sds inserted[100];
     for (int i = 0; i < 100; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
 
-    TEST_ASSERT(fbtreeDelete(fbt, inserted[50]));
+    EXPECT_TRUE(fbtreeDelete(fbt, inserted[50]));
 
     const_sds result = fbtreeGetAtRank(fbt, 50);
-    TEST_ASSERT(result && memcmp(result, "key_051", 8) == 0);
-
+    EXPECT_EQ(memcmp(result, "key_051", 8), 0);
     result = fbtreeGetAtRank(fbt, 49);
-    TEST_ASSERT(result && memcmp(result, "key_049", 8) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(memcmp(result, "key_049", 8), 0);
 }
 
-TEST(FbtreeTest, get_rank_of_item) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, GetRankOfItem) {
     char buf[16];
     sds inserted[100];
     for (int i = 0; i < 100; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
 
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[0]) == 0);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[50]) == 50);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[99]) == 99);
+    EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[0]), 0);
+    EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[50]), 50);
+    EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[99]), 99);
 
     sds search = createString("key_100");
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, search) == -1);
+    EXPECT_EQ(fbtreeGetRankOfItem(fbt, search), -1);
     sdsfree(search);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_rank) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+TEST_F(FbtreeTest, GetAtRankEmptyTree) {
+    EXPECT_EQ(fbtreeGetAtRank(fbt, 0), nullptr);
+    EXPECT_EQ(fbtreeGetAtRank(fbt, 1), nullptr);
+}
 
+TEST_F(FbtreeTest, SeekToRank) {
     char buf[16];
     for (int i = 0; i < 100; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        sds str = createString(buf);
-        fbtreeInsert(fbt, str);
+        insert(buf);
     }
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Seek to middle and iterate */
     fbtreeSeekToRank(&it, 50);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "key_050", 8) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "key_051", 8) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_050", 8), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_051", 8), 0);
 
-    /* Seek to beginning */
     fbtreeSeekToRank(&it, 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "key_000", 8) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_000", 8), 0);
 
-    /* Seek to last item */
     fbtreeSeekToRank(&it, 99);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "key_099", 8) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_099", 8), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, rank_deep_tree) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+/* SeekToRank then iterate backward. */
+TEST_F(FbtreeTest, SeekToRankThenPrev) {
+    char buf[16];
+    for (int i = 0; i < 200; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        insert(buf);
+    }
 
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* Seek to rank 100, then iterate backward */
+    fbtreeSeekToRank(&it, 100);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_099", 8), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_098", 8), 0);
+
+    /* Seek to rank 0, prev should fail (nothing before first element) */
+    fbtreeSeekToRank(&it, 0);
+    /* Next returns rank 0 */
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_000", 8), 0);
+}
+
+/* SeekToRank out of bounds. */
+TEST_F(FbtreeTest, SeekToRankOutOfBounds) {
+    char buf[16];
+    for (int i = 0; i < 10; i++) {
+        snprintf(buf, sizeof(buf), "key_%03d", i);
+        insert(buf);
+    }
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* Seek past end */
+    fbtreeSeekToRank(&it, 100);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+}
+
+TEST_F(FbtreeTest, RankDeepTree) {
     const int count = TEST_THREE_LEVEL_ITEMS;
     char buf[16];
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "key_%05d", i);
-        sds str = createString(buf);
-        inserted[i] = fbtreeInsert(fbt, str);
+        inserted[i] = insert(buf);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    const_sds result;
+    EXPECT_EQ(memcmp(fbtreeGetAtRank(fbt, 0), "key_00000", 10), 0);
 
-    result = fbtreeGetAtRank(fbt, 0);
-    TEST_ASSERT(result && memcmp(result, "key_00000", 10) == 0);
-
-    result = fbtreeGetAtRank(fbt, count - 1);
     snprintf(buf, sizeof(buf), "key_%05d", count - 1);
-    TEST_ASSERT(result && memcmp(result, buf, 10) == 0);
+    EXPECT_EQ(memcmp(fbtreeGetAtRank(fbt, count - 1), buf, 10), 0);
 
     for (int i = 0; i < count; i += count / 10) {
-        result = fbtreeGetAtRank(fbt, i);
-        TEST_ASSERT(result == inserted[i]); /* Exact pointer match */
+        EXPECT_EQ(fbtreeGetAtRank(fbt, i), inserted[i]);
     }
-
     for (int i = 0; i < count; i += count / 10) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) == i);
+        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i);
     }
     zfree(inserted);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-/* ========== fbtreeSeekToScore Tests ==========
- * These tests use string literals where the first 8 bytes are the "score" prefix.
- * Lexicographic ordering: "AAAAAAAA" < "BBBBBBBB" < "CCCCCCCC" */
+/* ========== fbtreeSeekToScore Tests ========== */
 
-TEST(FbtreeTest, seek_to_score_exact) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScoreExact) {
     fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
     fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
@@ -1815,182 +1506,170 @@ TEST(FbtreeTest, seek_to_score_exact) {
     fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
 
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "BBBBBBBB", 8) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "BBBBBBBB", 8), 0);
 }
 
-TEST(FbtreeTest, seek_to_score_between) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScoreBetween) {
     fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
     fbtreeInsert(fbt, createString("CCCCCCCCelem_1"));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it); /* Between AAAA and CCCC */
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
 
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "CCCCCCCC", 8) == 0); /* Should position at first >= "BBBB" */
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "CCCCCCCC", 8), 0);
 }
 
-TEST(FbtreeTest, seek_to_score_past_end) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScorePastEnd) {
     fbtreeInsert(fbt, createString("AAAAAAAAelem"));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it); /* Past all elements */
+    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
 
     const_sds pos;
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, seek_to_score_past_end_then_prev) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScorePastEndThenPrev) {
     fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
     fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it); /* Past all elements (+inf) */
+    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
 
-    /* Backward should work - iterate from end */
     const_sds pos;
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "CCCCCCCC", 8) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "BBBBBBBB", 8) == 0);
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "AAAAAAAA", 8) == 0);
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "CCCCCCCC", 8), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "BBBBBBBB", 8), 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 
-    /* Verify forward from past-end invalidates iterator */
+    /* Forward from past-end invalidates */
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
-    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Fails and invalidates */
-    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Now invalid */
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-TEST(FbtreeTest, seek_to_score_before_start_then_next) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScoreBeforeStartThenNext) {
     fbtreeInsert(fbt, createString("MMMMMMMMelem_0"));
     fbtreeInsert(fbt, createString("NNNNNNNNelem_1"));
     fbtreeInsert(fbt, createString("OOOOOOOOelem_2"));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it); /* Before all elements (-inf) */
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
 
-    /* Forward should work - iterate from start */
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "MMMMMMMM", 8) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "NNNNNNNN", 8) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "OOOOOOOO", 8) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "NNNNNNNN", 8), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "OOOOOOOO", 8), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Verify backward from before-start invalidates iterator */
+    /* Backward from before-start invalidates */
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
-    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Fails and invalidates */
-    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Now invalid */
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, seek_to_score_before_start) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScoreBeforeStart) {
     fbtreeInsert(fbt, createString("MMMMMMMMelem"));
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it); /* Before all elements */
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
 
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "MMMMMMMM", 8) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
 }
 
-TEST(FbtreeTest, seek_to_score_empty) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScoreEmpty) {
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
 
     const_sds pos;
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
-TEST(FbtreeTest, seek_to_score_deep_tree) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+/* Seek to exact score match then prev - verifies prev returns element before the match. */
+TEST_F(FbtreeTest, SeekToScoreExactThenPrev) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+
+    const_sds pos;
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
+}
+
+/* Seek to score on single-element tree. */
+TEST_F(FbtreeTest, SeekToScoreSingleElement) {
+    fbtreeInsert(fbt, createString("MMMMMMMMonly"));
+
+    fbtreeIterator it;
+    const_sds pos;
+
+    /* Exact match */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "MMMMMMMM", &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
+
+    /* Before */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
+
+    /* After */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+}
+
+TEST_F(FbtreeTest, SeekToScoreDeepTree) {
     const int count = TEST_THREE_LEVEL_ITEMS;
     char buf[24];
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "%08d_elem_%05d", i, i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Seek to middle of deep tree */
     snprintf(buf, sizeof(buf), "%08d", count / 2);
     fbtreeSeekToScore(fbt, buf, &it);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, buf, 8) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, buf, 8), 0);
 
-    /* Seek near end */
     snprintf(buf, sizeof(buf), "%08d", count - 10);
     fbtreeSeekToScore(fbt, buf, &it);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, buf, 8) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, buf, 8), 0);
 }
 
-TEST(FbtreeTest, seek_to_score_iterate) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToScoreIterate) {
     fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
     fbtreeInsert(fbt, createString("BBBBBBBBelem_0"));
     fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
@@ -2008,81 +1687,74 @@ TEST(FbtreeTest, seek_to_score_iterate) {
     while (fbtreeNext(&it, &pos) && memcmp(pos, "BBBBBBBB", 8) == 0) {
         count++;
     }
-    TEST_ASSERT(count == 5);
+    EXPECT_EQ(count, 5);
+}
 
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+/* Seek to score with duplicate scores - verify boundary positioning. */
+TEST_F(FbtreeTest, SeekToScoreDuplicateScores) {
+    /* Insert multiple elements with same 8-byte score prefix */
+    fbtreeInsert(fbt, createString("AAAAAAAAfirst"));
+    fbtreeInsert(fbt, createString("BBBBBBBBa_elem"));
+    fbtreeInsert(fbt, createString("BBBBBBBBb_elem"));
+    fbtreeInsert(fbt, createString("BBBBBBBBc_elem"));
+    fbtreeInsert(fbt, createString("CCCCCCCClast"));
+
+    fbtreeIterator it;
+    const_sds pos;
+
+    /* Seek to "BBBBBBBB" - should land at first B element */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "BBBBBBBBa_elem", 15), 0);
+
+    /* Prev from that position should return the A element */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
 }
 
 /* ========== Inner Node Binary Search Tests ========== */
 
-/* When all items in an inner node share identical feature bytes (first 4 bytes
- * after the common prefix), the SIMD pass returns the full range and the binary
- * search on anchors must resolve every lookup on its own.
- *
- * Setup: fill >NODE_CAPACITY items all starting with "XXXX" (identical feature
- * bytes), plus one outlier starting with "A" so the inner node's common prefix
- * is zero bytes.  Every search among the "XXXX" items therefore hits the binary
- * search path. */
-TEST(FbtreeTest, inner_bsearch_identical_feature_bytes) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Insert outlier first so it sorts before all "XXXX" items */
+TEST_F(FbtreeTest, InnerBsearchIdenticalFeatureBytes) {
     sds outlier = fbtreeInsert(fbt, createString("A_outlier"));
 
-    /* Insert enough same-prefix items to fill an inner node (needs >NODE_CAPACITY
-     * items to create at least 2 leaves and thus an inner node) */
     const int count = TEST_NODE_CAPACITY + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     char buf[16];
     for (int i = 0; i < count; i++) {
-        /* All share "XXXX" as first 4 bytes - identical feature bytes at prefix_len=0 */
         snprintf(buf, sizeof(buf), "XXXX_%05d", i);
         inserted[i] = fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)(count + 1));
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)(count + 1));
 
-    /* All same-prefix items must be findable - each lookup exercises binary search */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) == i + 1); /* +1 for outlier at rank 0 */
+        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i + 1);
     }
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, outlier) == 0);
+    EXPECT_EQ(fbtreeGetRankOfItem(fbt, outlier), 0);
 
-    /* Iteration is sorted: outlier first, then XXXX items in order */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos) && memcmp(pos, "A_outlier", 10) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "A_outlier", 10), 0);
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "XXXX_%05d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
 /* ========== Long Prefix Tests ========== */
 
-static sds createPrefixString(const char *prefix_char, size_t prefix_len, const char *suffix) {
-    size_t suffix_len = strlen(suffix) + 1; /* include null terminator */
-    sds s = sdsnewlen(NULL, prefix_len + suffix_len);
-    memset(s, prefix_char[0], prefix_len);
-    memcpy(s + prefix_len, suffix, suffix_len);
-    return s;
-}
-
-TEST(FbtreeTest, long_prefix_basic) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    const size_t prefix_len = TEST_EMBED_PREFIX_LEN + 6; /* require long prefix storage */
-    const int count = TEST_TWO_LEVEL_ITEMS;              /* enough to create inner node */
+TEST_F(FbtreeTest, LongPrefixBasic) {
+    const size_t prefix_len = TEST_EMBED_PREFIX_LEN + 6;
+    const int count = TEST_TWO_LEVEL_ITEMS;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     char suffix[8];
 
@@ -2090,37 +1762,29 @@ TEST(FbtreeTest, long_prefix_basic) {
         snprintf(suffix, sizeof(suffix), "s%05d", i);
         inserted[i] = fbtreeInsert(fbt, createPrefixString("X", prefix_len, suffix));
     }
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
+    expectValid();
 
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    /* All items findable */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) == i);
+        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i);
     }
 
-    /* Iteration order correct */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "s%05d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos + prefix_len, suffix, 6) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos + prefix_len, suffix, 6), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, very_long_prefix) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    const size_t prefix_len = TEST_EMBED_PREFIX_LEN * 10; /* well beyond embedded limit */
-    const int count = TEST_NODE_CAPACITY + 10;            /* force node split */
+TEST_F(FbtreeTest, VeryLongPrefix) {
+    const size_t prefix_len = TEST_EMBED_PREFIX_LEN * 10;
+    const int count = TEST_NODE_CAPACITY + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
     char suffix[8];
 
@@ -2128,36 +1792,27 @@ TEST(FbtreeTest, very_long_prefix) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
         inserted[i] = fbtreeInsert(fbt, createPrefixString("P", prefix_len, suffix));
     }
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
+    expectValid();
 
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    /* Verify ordering and rank */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) == i);
+        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i);
     }
 
-    /* Forward iteration */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
     for (int i = 0; i < count; i++) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos + prefix_len, suffix, 5) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos + prefix_len, suffix, 5), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, long_prefix_multilevel) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Long prefix, enough items for 3-level tree */
+TEST_F(FbtreeTest, LongPrefixMultilevel) {
     const size_t prefix_len = TEST_EMBED_PREFIX_LEN + 14;
     const int count = TEST_THREE_LEVEL_ITEMS;
     char suffix[16];
@@ -2166,27 +1821,20 @@ TEST(FbtreeTest, long_prefix_multilevel) {
         snprintf(suffix, sizeof(suffix), "item_%05d", i);
         fbtreeInsert(fbt, createPrefixString("L", prefix_len, suffix));
     }
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
+    expectValid();
 
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)count);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    /* Spot check ranks */
     const_sds first = fbtreeGetAtRank(fbt, 0);
-    TEST_ASSERT(first && memcmp(first + prefix_len, "item_00000", 11) == 0);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(memcmp(first + prefix_len, "item_00000", 11), 0);
 
     const_sds last = fbtreeGetAtRank(fbt, count - 1);
     snprintf(suffix, sizeof(suffix), "item_%05d", count - 1);
-    TEST_ASSERT(last && memcmp(last + prefix_len, suffix, 11) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    ASSERT_NE(last, nullptr);
+    EXPECT_EQ(memcmp(last + prefix_len, suffix, 11), 0);
 }
 
-TEST(FbtreeTest, long_prefix_delete) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Long prefix with enough items to create inner nodes */
+TEST_F(FbtreeTest, LongPrefixDelete) {
     const size_t prefix_len = TEST_EMBED_PREFIX_LEN + 4;
     const int count = TEST_NODE_CAPACITY * 2;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
@@ -2196,72 +1844,58 @@ TEST(FbtreeTest, long_prefix_delete) {
         snprintf(suffix, sizeof(suffix), "d%03d", i);
         inserted[i] = fbtreeInsert(fbt, createPrefixString("D", prefix_len, suffix));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Delete every other item */
     for (int i = 0; i < count; i += 2) {
-        TEST_ASSERT(fbtreeDelete(fbt, inserted[i]));
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
     }
-    TEST_ASSERT(fbtreeLength(fbt) == (size_t)(count / 2));
-    TEST_ASSERT(is_tree_valid(fbt));
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)(count / 2));
+    expectValid();
 
-    /* Remaining items still accessible */
     for (int i = 1; i < count; i += 2) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, long_prefix_boundary) {
-    size_t used_memory_before = zmalloc_used_memory();
-
-    /* Case 1: inner node common prefix is exactly TEST_EMBED_PREFIX_LEN (embedded storage).
-     * Items differ only in the byte immediately after the shared prefix, so the inner
-     * node prefix is exactly TEST_EMBED_PREFIX_LEN bytes and is stored inline. */
+TEST_F(FbtreeTest, LongPrefixBoundary) {
     const int count = TEST_NODE_CAPACITY + 10;
     char suffix[8];
+
+    /* Case 1: prefix exactly at EMBED_PREFIX_LEN (embedded storage) */
     {
-        fbtreeIndex *fbt = fbtreeCreate();
+        /* Use a separate tree for this sub-case */
+        fbtreeIndex *fbt1 = fbtreeCreate();
         sds *inserted = (sds *)zmalloc(count * sizeof(sds));
         for (int i = 0; i < count; i++) {
             snprintf(suffix, sizeof(suffix), "%c%04d", 'a' + (i % 26), i);
-            inserted[i] = fbtreeInsert(fbt, createPrefixString("X", TEST_EMBED_PREFIX_LEN, suffix));
+            inserted[i] = fbtreeInsert(fbt1, createPrefixString("X", TEST_EMBED_PREFIX_LEN, suffix));
         }
-        TEST_ASSERT(is_tree_valid(fbt));
+        EXPECT_TRUE(fbtreeDebugValidate(fbt1, false));
         for (int i = 0; i < count; i++)
-            TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+            EXPECT_GE(fbtreeGetRankOfItem(fbt1, inserted[i]), 0);
         zfree(inserted);
-        fbtreeFree(fbt);
+        fbtreeFree(fbt1);
     }
 
-    /* Case 2: inner node common prefix is TEST_EMBED_PREFIX_LEN+1 (long prefix storage).
-     * Items differ only after TEST_EMBED_PREFIX_LEN+1 shared bytes, so the inner node
-     * must store its prefix via the long-prefix pointer path. */
+    /* Case 2: prefix at EMBED_PREFIX_LEN+1 (long prefix storage) */
     {
-        fbtreeIndex *fbt = fbtreeCreate();
+        fbtreeIndex *fbt2 = fbtreeCreate();
         sds *inserted = (sds *)zmalloc(count * sizeof(sds));
         for (int i = 0; i < count; i++) {
             snprintf(suffix, sizeof(suffix), "%c%04d", 'a' + (i % 26), i);
-            inserted[i] = fbtreeInsert(fbt, createPrefixString("X", TEST_EMBED_PREFIX_LEN + 1, suffix));
+            inserted[i] = fbtreeInsert(fbt2, createPrefixString("X", TEST_EMBED_PREFIX_LEN + 1, suffix));
         }
-        TEST_ASSERT(is_tree_valid(fbt));
+        EXPECT_TRUE(fbtreeDebugValidate(fbt2, false));
         for (int i = 0; i < count; i++)
-            TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+            EXPECT_GE(fbtreeGetRankOfItem(fbt2, inserted[i]), 0);
         zfree(inserted);
-        fbtreeFree(fbt);
+        fbtreeFree(fbt2);
     }
-
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, long_prefix_shrink_to_short) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create tree with long prefix - enough items to force inner node */
+TEST_F(FbtreeTest, LongPrefixShrinkToShort) {
     const size_t long_prefix = TEST_EMBED_PREFIX_LEN + 14;
     const int count = TEST_NODE_CAPACITY + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
@@ -2271,37 +1905,27 @@ TEST(FbtreeTest, long_prefix_shrink_to_short) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
         inserted[i] = fbtreeInsert(fbt, createPrefixString("A", long_prefix, suffix));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Insert item with different first byte - shrinks common prefix to 0 (long → short) */
     sds outlier = fbtreeInsert(fbt, createPrefixString("B", long_prefix, "zzz"));
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* All items still findable */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, outlier) >= 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, outlier), 0);
 
-    /* Delete outlier - prefix could grow back to long */
-    TEST_ASSERT(fbtreeDelete(fbt, outlier));
-    TEST_ASSERT(is_tree_valid(fbt));
+    EXPECT_TRUE(fbtreeDelete(fbt, outlier));
+    expectValid();
 
-    /* Original items still findable after prefix regrows */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, long_prefix_realloc) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create tree with long common prefix (2x embedded limit) */
+TEST_F(FbtreeTest, LongPrefixRealloc) {
     const size_t long_prefix = TEST_EMBED_PREFIX_LEN * 2;
     const int count = TEST_NODE_CAPACITY + 10;
     sds *inserted = (sds *)zmalloc(count * sizeof(sds));
@@ -2311,228 +1935,142 @@ TEST(FbtreeTest, long_prefix_realloc) {
         snprintf(suffix, sizeof(suffix), "s%03d", i);
         inserted[i] = fbtreeInsert(fbt, createPrefixString("X", long_prefix, suffix));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Insert item that shares fewer bytes - shrinks long prefix, still long */
     const size_t mid_prefix = TEST_EMBED_PREFIX_LEN + 4;
     sds s_mid = sdsnewlen(NULL, mid_prefix + 5);
     memset(s_mid, 'X', mid_prefix);
-    memcpy(s_mid + mid_prefix, "Ymid", 5); /* Differs at mid_prefix */
+    memcpy(s_mid + mid_prefix, "Ymid", 5);
     sds item_mid = fbtreeInsert(fbt, s_mid);
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Insert item that shares more bytes with original but fewer with s_mid */
-    /* Common prefix stays at mid_prefix */
     const size_t longer_prefix = TEST_EMBED_PREFIX_LEN + 14;
     sds s_longer = sdsnewlen(NULL, longer_prefix + 5);
     memset(s_longer, 'X', longer_prefix);
     memcpy(s_longer + longer_prefix, "Zlng", 5);
     sds item_longer = fbtreeInsert(fbt, s_longer);
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* All items findable */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, item_mid) >= 0);
-    TEST_ASSERT(fbtreeGetRankOfItem(fbt, item_longer) >= 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, item_mid), 0);
+    EXPECT_GE(fbtreeGetRankOfItem(fbt, item_longer), 0);
 
-    /* Delete items to potentially grow prefix back */
-    TEST_ASSERT(fbtreeDelete(fbt, item_mid));
-    TEST_ASSERT(fbtreeDelete(fbt, item_longer));
-    TEST_ASSERT(is_tree_valid(fbt));
+    EXPECT_TRUE(fbtreeDelete(fbt, item_mid));
+    EXPECT_TRUE(fbtreeDelete(fbt, item_longer));
+    expectValid();
 
-    /* Original items still work */
     for (int i = 0; i < count; i++) {
-        TEST_ASSERT(fbtreeGetRankOfItem(fbt, inserted[i]) >= 0);
+        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
     }
 
     zfree(inserted);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
+
 /* ========== Pop Min/Max Tests ========== */
 
-TEST(FbtreeTest, pop_min_single) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("only");
-    fbtreeInsert(fbt, str);
-    TEST_ASSERT(fbtreeLength(fbt) == 1);
+TEST_F(FbtreeTest, PopMinSingle) {
+    insert("only");
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
 
     sds popped = fbtreePopMin(fbt);
-    TEST_ASSERT(popped != NULL);
-    TEST_ASSERT(memcmp(popped, "only", 5) == 0);
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-    TEST_ASSERT(is_tree_valid(fbt));
+    ASSERT_NE(popped, nullptr);
+    EXPECT_EQ(memcmp(popped, "only", 5), 0);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
     sdsfree(popped);
 
-    /* Pop from empty returns NULL */
-    TEST_ASSERT(fbtreePopMin(fbt) == NULL);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreePopMin(fbt), nullptr);
 }
 
-TEST(FbtreeTest, pop_max_single) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    sds str = createString("only");
-    fbtreeInsert(fbt, str);
-    TEST_ASSERT(fbtreeLength(fbt) == 1);
+TEST_F(FbtreeTest, PopMaxSingle) {
+    insert("only");
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
 
     sds popped = fbtreePopMax(fbt);
-    TEST_ASSERT(popped != NULL);
-    TEST_ASSERT(memcmp(popped, "only", 5) == 0);
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-    TEST_ASSERT(is_tree_valid(fbt));
+    ASSERT_NE(popped, nullptr);
+    EXPECT_EQ(memcmp(popped, "only", 5), 0);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
     sdsfree(popped);
 
-    /* Pop from empty returns NULL */
-    TEST_ASSERT(fbtreePopMax(fbt) == NULL);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreePopMax(fbt), nullptr);
 }
 
-TEST(FbtreeTest, pop_min_multiple) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Insert out of order */
+TEST_F(FbtreeTest, PopMinMultiple) {
     const char *items[] = {"cherry", "apple", "banana", "date"};
+    for (auto s : items) fbtreeInsert(fbt, createString(s));
+
+    const char *expected[] = {"apple", "banana", "cherry", "date"};
+    size_t expected_lens[] = {6, 7, 7, 5};
     for (int i = 0; i < 4; i++) {
-        fbtreeInsert(fbt, createString(items[i]));
+        sds popped = fbtreePopMin(fbt);
+        ASSERT_NE(popped, nullptr);
+        EXPECT_EQ(memcmp(popped, expected[i], expected_lens[i]), 0);
+        sdsfree(popped);
+        expectValid();
     }
-
-    /* Pop in sorted order: apple, banana, cherry, date */
-    sds popped = fbtreePopMin(fbt);
-    TEST_ASSERT(memcmp(popped, "apple", 6) == 0);
-    sdsfree(popped);
-    TEST_ASSERT(fbtreeLength(fbt) == 3);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    popped = fbtreePopMin(fbt);
-    TEST_ASSERT(memcmp(popped, "banana", 7) == 0);
-    sdsfree(popped);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    popped = fbtreePopMin(fbt);
-    TEST_ASSERT(memcmp(popped, "cherry", 7) == 0);
-    sdsfree(popped);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    popped = fbtreePopMin(fbt);
-    TEST_ASSERT(memcmp(popped, "date", 5) == 0);
-    sdsfree(popped);
-
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
 }
 
-TEST(FbtreeTest, pop_max_multiple) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Insert out of order */
+TEST_F(FbtreeTest, PopMaxMultiple) {
     const char *items[] = {"cherry", "apple", "banana", "date"};
+    for (auto s : items) fbtreeInsert(fbt, createString(s));
+
+    const char *expected[] = {"date", "cherry", "banana", "apple"};
+    size_t expected_lens[] = {5, 7, 7, 6};
     for (int i = 0; i < 4; i++) {
-        fbtreeInsert(fbt, createString(items[i]));
+        sds popped = fbtreePopMax(fbt);
+        ASSERT_NE(popped, nullptr);
+        EXPECT_EQ(memcmp(popped, expected[i], expected_lens[i]), 0);
+        sdsfree(popped);
+        expectValid();
     }
-
-    /* Pop in reverse sorted order: date, cherry, banana, apple */
-    sds popped = fbtreePopMax(fbt);
-    TEST_ASSERT(memcmp(popped, "date", 5) == 0);
-    sdsfree(popped);
-    TEST_ASSERT(fbtreeLength(fbt) == 3);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    popped = fbtreePopMax(fbt);
-    TEST_ASSERT(memcmp(popped, "cherry", 7) == 0);
-    sdsfree(popped);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    popped = fbtreePopMax(fbt);
-    TEST_ASSERT(memcmp(popped, "banana", 7) == 0);
-    sdsfree(popped);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    popped = fbtreePopMax(fbt);
-    TEST_ASSERT(memcmp(popped, "apple", 6) == 0);
-    sdsfree(popped);
-
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-    TEST_ASSERT(is_tree_valid(fbt));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
 }
 
-TEST(FbtreeTest, pop_min_multilevel) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create multi-level tree */
+TEST_F(FbtreeTest, PopMinMultilevel) {
     char buf[16];
     const int count = TEST_NODE_CAPACITY * 3;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Pop all items - should come out in sorted order */
     for (int i = 0; i < count; i++) {
         sds popped = fbtreePopMin(fbt);
-        TEST_ASSERT(popped != NULL);
+        ASSERT_NE(popped, nullptr);
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
         sdsfree(popped);
-        TEST_ASSERT(is_tree_valid(fbt));
+        expectValid();
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
 }
 
-TEST(FbtreeTest, pop_max_multilevel) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Create multi-level tree */
+TEST_F(FbtreeTest, PopMaxMultilevel) {
     char buf[16];
     const int count = TEST_NODE_CAPACITY * 3;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "key_%03d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
-    /* Pop all items - should come out in reverse sorted order */
     for (int i = count - 1; i >= 0; i--) {
         sds popped = fbtreePopMax(fbt);
-        TEST_ASSERT(popped != NULL);
+        ASSERT_NE(popped, nullptr);
         snprintf(buf, sizeof(buf), "key_%03d", i);
-        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
         sdsfree(popped);
-        TEST_ASSERT(is_tree_valid(fbt));
+        expectValid();
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
 }
 
-TEST(FbtreeTest, pop_alternating) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, PopAlternating) {
     char buf[16];
     const int count = 100;
     for (int i = 0; i < count; i++) {
@@ -2540,7 +2078,6 @@ TEST(FbtreeTest, pop_alternating) {
         fbtreeInsert(fbt, createString(buf));
     }
 
-    /* Alternate between pop min and pop max */
     int min_idx = 0, max_idx = count - 1;
     for (int i = 0; i < count; i++) {
         sds popped;
@@ -2551,106 +2088,129 @@ TEST(FbtreeTest, pop_alternating) {
             popped = fbtreePopMax(fbt);
             snprintf(buf, sizeof(buf), "key_%03d", max_idx--);
         }
-        TEST_ASSERT(popped != NULL);
-        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        ASSERT_NE(popped, nullptr);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
         sdsfree(popped);
-        TEST_ASSERT(is_tree_valid(fbt));
+        expectValid();
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 0);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
 }
 
-TEST(FbtreeTest, pop_empty) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    /* Pop from empty tree returns NULL */
-    TEST_ASSERT(fbtreePopMin(fbt) == NULL);
-    TEST_ASSERT(fbtreePopMax(fbt) == NULL);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+TEST_F(FbtreeTest, PopEmpty) {
+    EXPECT_EQ(fbtreePopMin(fbt), nullptr);
+    EXPECT_EQ(fbtreePopMax(fbt), nullptr);
 }
 
-TEST(FbtreeTest, pop_with_iteration_and_insert) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+/* Pop from deep (3+ level) tree - exercises pop through multiple inner node levels. */
+TEST_F(FbtreeTest, PopMinDeepTree) {
+    const int count = TEST_THREE_LEVEL_ITEMS;
+    char buf[16];
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Pop first 100 items from deep tree */
+    for (int i = 0; i < 100; i++) {
+        sds popped = fbtreePopMin(fbt);
+        ASSERT_NE(popped, nullptr);
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
+        sdsfree(popped);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)(count - 100));
+    expectValid();
+}
+
+TEST_F(FbtreeTest, PopMaxDeepTree) {
+    const int count = TEST_THREE_LEVEL_ITEMS;
+    char buf[16];
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Pop last 100 items from deep tree */
+    for (int i = count - 1; i >= count - 100; i--) {
+        sds popped = fbtreePopMax(fbt);
+        ASSERT_NE(popped, nullptr);
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
+        sdsfree(popped);
+    }
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)(count - 100));
+    expectValid();
+}
+
+TEST_F(FbtreeTest, PopWithIterationAndInsert) {
     char buf[16];
     sds popped;
     const_sds pos;
 
-    /* Insert ascending (append path): k100-k199 */
+    /* Insert ascending: k100-k199 */
     for (int i = 100; i < 200; i++) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 100);
+    EXPECT_EQ(fbtreeLength(fbt), 100u);
 
     /* Pop min a few times */
     for (int i = 100; i < 110; i++) {
         popped = fbtreePopMin(fbt);
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
         sdsfree(popped);
-        TEST_ASSERT(is_tree_valid(fbt));
+        expectValid();
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 90);
+    EXPECT_EQ(fbtreeLength(fbt), 90u);
 
-    /* Insert descending (prepend path): k099 down to k050 */
+    /* Insert descending: k099 down to k050 */
     for (int i = 99; i >= 50; i--) {
         snprintf(buf, sizeof(buf), "k%03d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 140);
+    EXPECT_EQ(fbtreeLength(fbt), 140u);
 
     /* Pop max a few times */
     for (int i = 199; i >= 190; i--) {
         popped = fbtreePopMax(fbt);
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(memcmp(popped, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
         sdsfree(popped);
-        TEST_ASSERT(is_tree_valid(fbt));
+        expectValid();
     }
-    TEST_ASSERT(fbtreeLength(fbt) == 130);
+    EXPECT_EQ(fbtreeLength(fbt), 130u);
 
-    /* Iterate forward and verify sorted order: k050-k189 */
+    /* Iterate forward: k050-k189 (excluding popped k100-k109) */
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     for (int i = 50; i < 190; i++) {
-        if (i >= 100 && i < 110) continue; /* popped */
-        TEST_ASSERT(fbtreeNext(&it, &pos));
+        if (i >= 100 && i < 110) continue;
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     /* Iterate backward */
     fbtreeInitIterator(&it, fbt);
     for (int i = 189; i >= 50; i--) {
         if (i >= 100 && i < 110) continue;
-        TEST_ASSERT(fbtreePrev(&it, &pos));
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
         snprintf(buf, sizeof(buf), "k%03d", i);
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 }
 
-/* ========== fbtreeSeekToValue Tests ==========
- * These tests validate fbtreeSeekToValue which uses full sds comparison
- * (not just the 8-byte score prefix) for positioning. */
+/* ========== fbtreeSeekToValue Tests ========== */
 
-TEST(FbtreeTest, seek_to_value_exact) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    fbtreeInsert(fbt, createString("apple"));
-    fbtreeInsert(fbt, createString("banana"));
-    fbtreeInsert(fbt, createString("cherry"));
+TEST_F(FbtreeTest, SeekToValueExact) {
+    insert("apple");
+    insert("banana");
+    insert("cherry");
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -2658,133 +2218,133 @@ TEST(FbtreeTest, seek_to_value_exact) {
     fbtreeSeekToValue(fbt, seek_val, &it);
 
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "banana", 7) == 0);
-
-    /* Next element after banana is cherry */
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "banana", 7), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cherry", 7), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     sdsfree(seek_val);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_between) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    fbtreeInsert(fbt, createString("apple"));
-    fbtreeInsert(fbt, createString("cherry"));
-    fbtreeInsert(fbt, createString("elderberry"));
+TEST_F(FbtreeTest, SeekToValueBetween) {
+    insert("apple");
+    insert("cherry");
+    insert("elderberry");
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    sds seek_val = createString("banana"); /* Between apple and cherry */
+    sds seek_val = createString("banana");
     fbtreeSeekToValue(fbt, seek_val, &it);
 
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0); /* First element >= "banana" */
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cherry", 7), 0);
 
     sdsfree(seek_val);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_past_end) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    fbtreeInsert(fbt, createString("apple"));
-    fbtreeInsert(fbt, createString("banana"));
-    fbtreeInsert(fbt, createString("cherry"));
+TEST_F(FbtreeTest, SeekToValuePastEnd) {
+    insert("apple");
+    insert("banana");
+    insert("cherry");
 
     fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    sds seek_val = createString("zzz"); /* Past all elements */
-    fbtreeSeekToValue(fbt, seek_val, &it);
-
+    sds seek_val = createString("zzz");
     const_sds pos;
-    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* No element >= "zzz" */
+
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     /* Prev from past-end returns last element */
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToValue(fbt, seek_val, &it);
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cherry", 7), 0);
 
-    /* Verify forward from past-end invalidates iterator */
+    /* Forward from past-end invalidates */
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToValue(fbt, seek_val, &it);
-    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Fails and invalidates */
-    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Now invalid */
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 
     sdsfree(seek_val);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_before_start) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
-    fbtreeInsert(fbt, createString("banana"));
-    fbtreeInsert(fbt, createString("cherry"));
-    fbtreeInsert(fbt, createString("date"));
+TEST_F(FbtreeTest, SeekToValueBeforeStart) {
+    insert("banana");
+    insert("cherry");
+    insert("date");
 
     fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    sds seek_val = createString("apple"); /* Before all elements */
-    fbtreeSeekToValue(fbt, seek_val, &it);
-
-    /* Forward should return first element */
+    sds seek_val = createString("apple");
     const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "banana", 7) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "date", 5) == 0);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
 
-    /* Verify backward from before-start invalidates iterator */
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToValue(fbt, seek_val, &it);
-    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Fails and invalidates */
-    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Now invalid */
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "banana", 7), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cherry", 7), 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "date", 5), 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+
+    /* Backward from before-start invalidates */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     sdsfree(seek_val);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_empty) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToValueEmpty) {
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     sds seek_val = createString("anything");
     fbtreeSeekToValue(fbt, seek_val, &it);
 
     const_sds pos;
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 
     sdsfree(seek_val);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_shared_prefix) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
+/* Seek to value on single-element tree. */
+TEST_F(FbtreeTest, SeekToValueSingleElement) {
+    insert("middle");
 
-    /* All elements share identical 8-byte prefix "XXXXXXXX" but differ in suffix.
-     * This validates that fbtreeSeekToValue uses full sds comparison,
-     * not just the 8-byte score prefix. */
+    fbtreeIterator it;
+    const_sds pos;
+
+    /* Exact match */
+    fbtreeInitIterator(&it, fbt);
+    sds exact = createString("middle");
+    fbtreeSeekToValue(fbt, exact, &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "middle", 7), 0);
+    sdsfree(exact);
+
+    /* Before */
+    fbtreeInitIterator(&it, fbt);
+    sds before = createString("aaa");
+    fbtreeSeekToValue(fbt, before, &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "middle", 7), 0);
+    sdsfree(before);
+
+    /* After */
+    fbtreeInitIterator(&it, fbt);
+    sds after = createString("zzz");
+    fbtreeSeekToValue(fbt, after, &it);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    sdsfree(after);
+}
+
+TEST_F(FbtreeTest, SeekToValueSharedPrefix) {
     fbtreeInsert(fbt, createString("XXXXXXXXalpha"));
     fbtreeInsert(fbt, createString("XXXXXXXXbravo"));
     fbtreeInsert(fbt, createString("XXXXXXXXcharlie"));
@@ -2792,192 +2352,160 @@ TEST(FbtreeTest, seek_to_value_shared_prefix) {
     fbtreeInsert(fbt, createString("XXXXXXXXecho"));
 
     fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
 
-    /* Seek to exact match within shared-prefix group */
+    /* Exact match within shared-prefix group */
+    fbtreeInitIterator(&it, fbt);
     sds seek_val = createString("XXXXXXXXcharlie");
     fbtreeSeekToValue(fbt, seek_val, &it);
-
-    const_sds pos;
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "XXXXXXXXcharlie", 16) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "XXXXXXXXcharlie", 16), 0);
     sdsfree(seek_val);
 
-    /* Seek to value between two shared-prefix elements */
+    /* Between two shared-prefix elements */
     fbtreeInitIterator(&it, fbt);
-    seek_val = createString("XXXXXXXXcat"); /* Between "bravo" and "charlie" suffixes */
+    seek_val = createString("XXXXXXXXcat");
     fbtreeSeekToValue(fbt, seek_val, &it);
-
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "XXXXXXXXcharlie", 16) == 0); /* First >= "XXXXXXXXcat" */
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "XXXXXXXXcharlie", 16), 0);
     sdsfree(seek_val);
 
     /* Prev from that position should return bravo */
     fbtreeInitIterator(&it, fbt);
     seek_val = createString("XXXXXXXXcat");
     fbtreeSeekToValue(fbt, seek_val, &it);
-    TEST_ASSERT(fbtreePrev(&it, &pos));
-    TEST_ASSERT(memcmp(pos, "XXXXXXXXbravo", 14) == 0);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "XXXXXXXXbravo", 14), 0);
     sdsfree(seek_val);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_deep_tree) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToValueDeepTree) {
     const int count = TEST_THREE_LEVEL_ITEMS;
     for (int i = 0; i < count; i++) {
         sds str = createBase26TestString("val_", "", i, 4);
         fbtreeInsert(fbt, str);
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     const_sds pos;
 
-    /* Seek to middle of deep tree */
     sds seek_mid = createBase26TestString("val_", "", count / 2, 4);
     fbtreeSeekToValue(fbt, seek_mid, &it);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(sdscmp(pos, seek_mid) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(sdscmp(pos, seek_mid), 0);
     sdsfree(seek_mid);
 
-    /* Seek near end */
     sds seek_near_end = createBase26TestString("val_", "", count - 5, 4);
     fbtreeSeekToValue(fbt, seek_near_end, &it);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(sdscmp(pos, seek_near_end) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(sdscmp(pos, seek_near_end), 0);
     sdsfree(seek_near_end);
 
-    /* Seek to first element */
     sds seek_first = createBase26TestString("val_", "", 0, 4);
     fbtreeSeekToValue(fbt, seek_first, &it);
-    TEST_ASSERT(fbtreeNext(&it, &pos));
-    TEST_ASSERT(sdscmp(pos, seek_first) == 0);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(sdscmp(pos, seek_first), 0);
     sdsfree(seek_first);
 
-    /* Seek past end */
     sds seek_past = createString("zzz_past_end");
     fbtreeSeekToValue(fbt, seek_past, &it);
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
     sdsfree(seek_past);
-
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
 
-TEST(FbtreeTest, seek_to_value_then_iterate) {
-    size_t used_memory_before = zmalloc_used_memory();
-    fbtreeIndex *fbt = fbtreeCreate();
-
+TEST_F(FbtreeTest, SeekToValueThenIterate) {
     char buf[16];
     const int count = 200;
     for (int i = 0; i < count; i++) {
         snprintf(buf, sizeof(buf), "item_%03d", i);
         fbtreeInsert(fbt, createString(buf));
     }
-    TEST_ASSERT(is_tree_valid(fbt));
+    expectValid();
 
     fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
     const_sds pos;
-
-    /* Seek to mid-range position */
     sds seek_val = createString("item_100");
-    fbtreeSeekToValue(fbt, seek_val, &it);
 
-    /* Iterate forward from seek position to end */
+    /* Forward from seek position */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
     for (int i = 100; i < count; i++) {
         snprintf(buf, sizeof(buf), "item_%03d", i);
-        TEST_ASSERT(fbtreeNext(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Seek again and iterate backward */
+    /* Backward from seek position */
     fbtreeInitIterator(&it, fbt);
     fbtreeSeekToValue(fbt, seek_val, &it);
-
-    /* Prev from position at item_100 returns item_099 */
     for (int i = 99; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "item_%03d", i);
-        TEST_ASSERT(fbtreePrev(&it, &pos));
-        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+        ASSERT_TRUE(fbtreePrev(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
     }
-    TEST_ASSERT(!fbtreePrev(&it, &pos));
+    EXPECT_FALSE(fbtreePrev(&it, &pos));
 
     sdsfree(seek_val);
-    fbtreeFree(fbt);
-    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
 }
+
+/* ========== Property-Based SeekToValue Tests ========== */
+
 /* Seek positions iterator at first element >= value (forward) */
-TEST(FbtreeTest, seek_to_value_property_forward_positioning) {
-    size_t used_memory_before = zmalloc_used_memory();
+TEST_F(FbtreeTest, SeekToValuePropertyForwardPositioning) {
+    /* Use a separate tree per iteration - free the fixture tree first */
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
     const int NUM_ITERATIONS = 150;
     unsigned int seed = 42;
 
     for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        fbtreeIndex *fbt = fbtreeCreate();
+        fbtreeIndex *tree = fbtreeCreate();
 
-        /* Vary tree size across iterations to cover different depths:
-         * - Small (1-60): single leaf
-         * - Medium (61-200): two-level tree
-         * - Large (200-1500): two/three-level tree */
         int num_elements;
         if (iter < 50) {
-            num_elements = 1 + (rand_r(&seed) % 60); /* single leaf */
+            num_elements = 1 + (rand_r(&seed) % 60);
         } else if (iter < 100) {
-            num_elements = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 140); /* two-level */
+            num_elements = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 140);
         } else {
-            num_elements = 200 + (rand_r(&seed) % 1300); /* two/three-level */
+            num_elements = 200 + (rand_r(&seed) % 1300);
         }
 
-        /* Generate random strings and insert into tree, keeping a sorted copy */
         std::vector<sds> sorted_values;
         sorted_values.reserve(num_elements);
 
         for (int i = 0; i < num_elements; i++) {
-            /* Generate a random value using base-26 encoding with varying prefixes */
             size_t val = rand_r(&seed) % 50000;
             const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
             const char *prefix = prefixes[rand_r(&seed) % 5];
             sds s = createBase26TestString(prefix, "", val, 4);
-            fbtreeInsert(fbt, s);
-            /* Keep a copy for verification */
+            fbtreeInsert(tree, s);
             sorted_values.push_back(sdsnewlen(s, sdslen(s)));
         }
 
-        /* Sort the copy using sdscmp */
         std::sort(sorted_values.begin(), sorted_values.end(), [](const sds a, const sds b) {
             return sdscmp(a, b) < 0;
         });
 
-        /* Generate a random seek value - mix of exact matches, between values, and beyond range */
         sds seek_val;
         int seek_type = rand_r(&seed) % 5;
         if (seek_type == 0 && num_elements > 0) {
-            /* Exact match: pick a random existing element */
             int idx = rand_r(&seed) % num_elements;
             seek_val = sdsnewlen(sorted_values[idx], sdslen(sorted_values[idx]));
         } else if (seek_type == 1) {
-            /* Value before all elements */
             seek_val = createString("AAAA");
         } else if (seek_type == 2) {
-            /* Value after all elements */
             seek_val = createString("zzzzzzzz");
         } else {
-            /* Random value that may fall between elements */
             size_t val = rand_r(&seed) % 50000;
             const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
             const char *prefix = prefixes[rand_r(&seed) % 5];
             seek_val = createBase26TestString(prefix, "", val, 4);
         }
 
-        /* Find expected result: first element >= seek_val in sorted list */
         sds expected = NULL;
         for (size_t i = 0; i < sorted_values.size(); i++) {
             if (sdscmp(sorted_values[i], seek_val) >= 0) {
@@ -2986,20 +2514,17 @@ TEST(FbtreeTest, seek_to_value_property_forward_positioning) {
             }
         }
 
-        /* Seek and verify */
         fbtreeIterator it;
-        fbtreeInitIterator(&it, fbt);
-        fbtreeSeekToValue(fbt, seek_val, &it);
+        fbtreeInitIterator(&it, tree);
+        fbtreeSeekToValue(tree, seek_val, &it);
 
         const_sds pos;
         bool got_next = fbtreeNext(&it, &pos);
 
         if (expected == NULL) {
-            /* No element >= seek_val exists, fbtreeNext should return false */
             ASSERT_FALSE(got_next) << "Iteration " << iter << ": expected no element >= seek value, but got one"
                                    << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
         } else {
-            /* Should return the first element >= seek_val */
             ASSERT_TRUE(got_next) << "Iteration " << iter << ": expected element >= seek value, but got none"
                                   << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
             ASSERT_EQ(sdscmp(pos, expected), 0)
@@ -3008,81 +2533,64 @@ TEST(FbtreeTest, seek_to_value_property_forward_positioning) {
                 << ", num_elements=" << num_elements << ")";
         }
 
-        /* Cleanup */
         sdsfree(seek_val);
-        for (auto &v : sorted_values) {
-            sdsfree(v);
-        }
-        fbtreeFree(fbt);
+        for (auto &v : sorted_values) sdsfree(v);
+        fbtreeFree(tree);
     }
-
-    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
 /* Seek positions iterator correctly for reverse iteration */
-TEST(FbtreeTest, seek_to_value_property_reverse_positioning) {
-    size_t used_memory_before = zmalloc_used_memory();
+TEST_F(FbtreeTest, SeekToValuePropertyReversePositioning) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
     const int NUM_ITERATIONS = 150;
     unsigned int seed = 123;
 
     for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        fbtreeIndex *fbt = fbtreeCreate();
+        fbtreeIndex *tree = fbtreeCreate();
 
-        /* Vary tree size across iterations to cover different depths:
-         * - Small (1-60): single leaf
-         * - Medium (61-200): two-level tree
-         * - Large (200-1500): two/three-level tree */
         int num_elements;
         if (iter < 50) {
-            num_elements = 1 + (rand_r(&seed) % 60); /* single leaf */
+            num_elements = 1 + (rand_r(&seed) % 60);
         } else if (iter < 100) {
-            num_elements = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 140); /* two-level */
+            num_elements = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 140);
         } else {
-            num_elements = 200 + (rand_r(&seed) % 1300); /* two/three-level */
+            num_elements = 200 + (rand_r(&seed) % 1300);
         }
 
-        /* Generate random strings and insert into tree, keeping a sorted copy */
         std::vector<sds> sorted_values;
         sorted_values.reserve(num_elements);
 
         for (int i = 0; i < num_elements; i++) {
-            /* Generate a random value using base-26 encoding with varying prefixes */
             size_t val = rand_r(&seed) % 50000;
             const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
             const char *prefix = prefixes[rand_r(&seed) % 5];
             sds s = createBase26TestString(prefix, "", val, 4);
-            fbtreeInsert(fbt, s);
-            /* Keep a copy for verification */
+            fbtreeInsert(tree, s);
             sorted_values.push_back(sdsnewlen(s, sdslen(s)));
         }
 
-        /* Sort the copy using sdscmp */
         std::sort(sorted_values.begin(), sorted_values.end(), [](const sds a, const sds b) {
             return sdscmp(a, b) < 0;
         });
 
-        /* Generate a random seek value - mix of exact matches, between values, and beyond range */
         sds seek_val;
         int seek_type = rand_r(&seed) % 5;
         if (seek_type == 0 && num_elements > 0) {
-            /* Exact match: pick a random existing element */
             int idx = rand_r(&seed) % num_elements;
             seek_val = sdsnewlen(sorted_values[idx], sdslen(sorted_values[idx]));
         } else if (seek_type == 1) {
-            /* Value before all elements */
             seek_val = createString("AAAA");
         } else if (seek_type == 2) {
-            /* Value after all elements */
             seek_val = createString("zzzzzzzz");
         } else {
-            /* Random value that may fall between elements */
             size_t val = rand_r(&seed) % 50000;
             const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
             const char *prefix = prefixes[rand_r(&seed) % 5];
             seek_val = createBase26TestString(prefix, "", val, 4);
         }
 
-        /* Find expected result for fbtreePrev: last element strictly < seek_val */
         sds expected_prev = NULL;
         for (int i = (int)sorted_values.size() - 1; i >= 0; i--) {
             if (sdscmp(sorted_values[i], seek_val) < 0) {
@@ -3091,20 +2599,17 @@ TEST(FbtreeTest, seek_to_value_property_reverse_positioning) {
             }
         }
 
-        /* Seek and call fbtreePrev (without calling fbtreeNext first) */
         fbtreeIterator it;
-        fbtreeInitIterator(&it, fbt);
-        fbtreeSeekToValue(fbt, seek_val, &it);
+        fbtreeInitIterator(&it, tree);
+        fbtreeSeekToValue(tree, seek_val, &it);
 
         const_sds pos;
         bool got_prev = fbtreePrev(&it, &pos);
 
         if (expected_prev == NULL) {
-            /* No element strictly < seek_val exists, fbtreePrev should return false */
             ASSERT_FALSE(got_prev) << "Iteration " << iter << ": expected no element < seek value, but got one"
                                    << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
         } else {
-            /* Should return the last element strictly < seek_val */
             ASSERT_TRUE(got_prev) << "Iteration " << iter << ": expected element < seek value, but got none"
                                   << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
             ASSERT_EQ(sdscmp(pos, expected_prev), 0)
@@ -3113,61 +2618,51 @@ TEST(FbtreeTest, seek_to_value_property_reverse_positioning) {
                 << ", num_elements=" << num_elements << ")";
         }
 
-        /* Cleanup */
         sdsfree(seek_val);
-        for (auto &v : sorted_values) {
-            sdsfree(v);
-        }
-        fbtreeFree(fbt);
+        for (auto &v : sorted_values) sdsfree(v);
+        fbtreeFree(tree);
     }
-
-    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
 
 /* Shared-prefix discrimination */
-TEST(FbtreeTest, seek_to_value_property_shared_prefix_discrimination) {
-    size_t used_memory_before = zmalloc_used_memory();
+TEST_F(FbtreeTest, SeekToValuePropertySharedPrefixDiscrimination) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
     const int NUM_ITERATIONS = 150;
     unsigned int seed = 777;
 
     for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
-        fbtreeIndex *fbt = fbtreeCreate();
+        fbtreeIndex *tree = fbtreeCreate();
 
-        /* Generate a random 8-byte prefix (same for all elements in this iteration) */
         char prefix[9];
         for (int j = 0; j < 8; j++) {
             prefix[j] = 'A' + (char)(rand_r(&seed) % 26);
         }
         prefix[8] = '\0';
 
-        /* Generate a random number of elements (10-500) sharing this 8-byte prefix
-         * but with different suffixes of varying lengths */
         int num_elements = 10 + (int)(rand_r(&seed) % 491);
 
         std::vector<sds> sorted_values;
         sorted_values.reserve(num_elements);
 
         for (int i = 0; i < num_elements; i++) {
-            /* Create suffix with varying length (1-12 bytes) and random content */
             int suffix_len = 1 + (int)(rand_r(&seed) % 12);
-            sds s = sdsnewlen(NULL, 8 + suffix_len + 1); /* prefix + suffix + null terminator */
+            sds s = sdsnewlen(NULL, 8 + suffix_len + 1);
             memcpy(s, prefix, 8);
             for (int k = 0; k < suffix_len; k++) {
                 s[8 + k] = 'a' + (char)(rand_r(&seed) % 26);
             }
             s[8 + suffix_len] = '\0';
 
-            fbtreeInsert(fbt, s);
-            /* Keep a copy for verification */
+            fbtreeInsert(tree, s);
             sorted_values.push_back(sdsnewlen(s, sdslen(s)));
         }
 
-        /* Sort the copy using sdscmp (full sds comparison) */
         std::sort(sorted_values.begin(), sorted_values.end(), [](const sds a, const sds b) {
             return sdscmp(a, b) < 0;
         });
 
-        /* Generate a random seek value with the SAME 8-byte prefix but a random suffix */
         int seek_suffix_len = 1 + (int)(rand_r(&seed) % 12);
         sds seek_val = sdsnewlen(NULL, 8 + seek_suffix_len + 1);
         memcpy(seek_val, prefix, 8);
@@ -3176,7 +2671,6 @@ TEST(FbtreeTest, seek_to_value_property_shared_prefix_discrimination) {
         }
         seek_val[8 + seek_suffix_len] = '\0';
 
-        /* Find expected result: first element whose FULL value is >= seek_val */
         sds expected = NULL;
         for (size_t i = 0; i < sorted_values.size(); i++) {
             if (sdscmp(sorted_values[i], seek_val) >= 0) {
@@ -3185,21 +2679,17 @@ TEST(FbtreeTest, seek_to_value_property_shared_prefix_discrimination) {
             }
         }
 
-        /* Seek and verify - this proves the function discriminates based on
-         * full sds comparison, not just the 8-byte prefix */
         fbtreeIterator it;
-        fbtreeInitIterator(&it, fbt);
-        fbtreeSeekToValue(fbt, seek_val, &it);
+        fbtreeInitIterator(&it, tree);
+        fbtreeSeekToValue(tree, seek_val, &it);
 
         const_sds pos;
         bool got_next = fbtreeNext(&it, &pos);
 
         if (expected == NULL) {
-            /* No element >= seek_val exists (seek suffix is past all suffixes) */
             ASSERT_FALSE(got_next) << "Iteration " << iter << ": expected no element >= seek value, but got one"
                                    << " (prefix=" << prefix << ", num_elements=" << num_elements << ")";
         } else {
-            /* Should return the first element whose full value >= seek_val */
             ASSERT_TRUE(got_next) << "Iteration " << iter << ": expected element >= seek value, but got none"
                                   << " (prefix=" << prefix << ", seek_val=" << seek_val
                                   << ", num_elements=" << num_elements << ")";
@@ -3208,10 +2698,8 @@ TEST(FbtreeTest, seek_to_value_property_shared_prefix_discrimination) {
                 << " (prefix=" << prefix << ", seek_val=" << seek_val << ", got=" << pos
                 << ", expected=" << expected << ", num_elements=" << num_elements << ")";
 
-            /* Verify the element before (if any) is strictly < seek_val.
-             * This confirms we got the FIRST element >= seek_val, not just any. */
-            fbtreeInitIterator(&it, fbt);
-            fbtreeSeekToValue(fbt, seek_val, &it);
+            fbtreeInitIterator(&it, tree);
+            fbtreeSeekToValue(tree, seek_val, &it);
             const_sds prev_pos;
             bool got_prev = fbtreePrev(&it, &prev_pos);
             if (got_prev) {
@@ -3221,13 +2709,8 @@ TEST(FbtreeTest, seek_to_value_property_shared_prefix_discrimination) {
             }
         }
 
-        /* Cleanup */
         sdsfree(seek_val);
-        for (auto &v : sorted_values) {
-            sdsfree(v);
-        }
-        fbtreeFree(fbt);
+        for (auto &v : sorted_values) sdsfree(v);
+        fbtreeFree(tree);
     }
-
-    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
