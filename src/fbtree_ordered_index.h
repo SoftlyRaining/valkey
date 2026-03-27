@@ -36,6 +36,12 @@ long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item);
  * If all elements have score < given score, iterator is positioned past end. */
 void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iterator);
 
+/* Value seek - positions iterator at first element with value >= given value.
+ * Uses full sds comparison (not just score prefix).
+ * Always positions the iterator (even if no exact match). Use fbtreeNext to get elements.
+ * If all elements have value < given value, iterator is positioned past end. */
+void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterator);
+
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
 

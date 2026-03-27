@@ -1328,6 +1328,50 @@ void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iter
     }
 }
 
+/* Seek to first element with value >= given value using full sds comparison.
+ * If value > all elements, positions past end (fbtreeNext fails, fbtreePrev works).
+ * If value < all elements, positions at start (fbtreePrev fails, fbtreeNext works). */
+void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterator) {
+    iter *it = iteratorFromOpaque(iterator);
+    it->fbt = NULL;
+    it->current_leaf = NULL;
+    it->current_index = 0;
+    it->leaf_count = 0;
+    it->state = ITER_AT_POSITION;
+
+    if (!fbt->root) return;
+
+    node *current = fbt->root;
+    size_t validated_len = 0;
+
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        int child_idx = findChildIndex(inner, value, validated_len);
+        if (child_idx >= inner->header.num_items) child_idx = inner->header.num_items - 1;
+        validated_len = inner->prefix_len;
+        current = inner->children[child_idx];
+    }
+
+    leafNode *leaf = (leafNode *)current;
+    int pos = leafNodeBinarySearch(leaf, value);
+
+    it->fbt = fbt;
+    it->current_leaf = leaf;
+    it->leaf_count = leaf->header.num_items;
+    it->current_index = pos;
+
+    if (pos >= leaf->header.num_items) {
+        /* Value beyond tree max */
+        it->current_leaf = NULL;
+        it->leaf_count = 0;
+        it->current_index = 0;
+        it->state = ITER_PAST_END;
+    } else if (pos == 0 && leaf == fbt->leftmost_leaf) {
+        /* At first element of tree - nothing before this */
+        it->state = ITER_BEFORE_START;
+    }
+}
+
 /* ========== Debug Functions ========== */
 
 typedef struct {

@@ -6,8 +6,10 @@
 
 #include "generated_wrappers.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 extern "C" {
 #include "fbtree_ordered_index.h"
@@ -2636,4 +2638,596 @@ TEST(FbtreeTest, pop_with_iteration_and_insert) {
 
     fbtreeFree(fbt);
     TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+/* ========== fbtreeSeekToValue Tests ==========
+ * These tests validate fbtreeSeekToValue which uses full sds comparison
+ * (not just the 8-byte score prefix) for positioning. */
+
+TEST(FbtreeTest, seek_to_value_exact) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("apple"));
+    fbtreeInsert(fbt, createString("banana"));
+    fbtreeInsert(fbt, createString("cherry"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    sds seek_val = createString("banana");
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "banana", 7) == 0);
+
+    /* Next element after banana is cherry */
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    sdsfree(seek_val);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_between) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("apple"));
+    fbtreeInsert(fbt, createString("cherry"));
+    fbtreeInsert(fbt, createString("elderberry"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    sds seek_val = createString("banana"); /* Between apple and cherry */
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0); /* First element >= "banana" */
+
+    sdsfree(seek_val);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_past_end) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("apple"));
+    fbtreeInsert(fbt, createString("banana"));
+    fbtreeInsert(fbt, createString("cherry"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    sds seek_val = createString("zzz"); /* Past all elements */
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    const_sds pos;
+    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* No element >= "zzz" */
+
+    /* Prev from past-end returns last element */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
+
+    /* Verify forward from past-end invalidates iterator */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Fails and invalidates */
+    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Now invalid */
+
+    sdsfree(seek_val);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_before_start) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeInsert(fbt, createString("banana"));
+    fbtreeInsert(fbt, createString("cherry"));
+    fbtreeInsert(fbt, createString("date"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    sds seek_val = createString("apple"); /* Before all elements */
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    /* Forward should return first element */
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "banana", 7) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "cherry", 7) == 0);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "date", 5) == 0);
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    /* Verify backward from before-start invalidates iterator */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    TEST_ASSERT(!fbtreePrev(&it, &pos)); /* Fails and invalidates */
+    TEST_ASSERT(!fbtreeNext(&it, &pos)); /* Now invalid */
+
+    sdsfree(seek_val);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_empty) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    sds seek_val = createString("anything");
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    const_sds pos;
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    sdsfree(seek_val);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_shared_prefix) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    /* All elements share identical 8-byte prefix "XXXXXXXX" but differ in suffix.
+     * This validates that fbtreeSeekToValue uses full sds comparison,
+     * not just the 8-byte score prefix. */
+    fbtreeInsert(fbt, createString("XXXXXXXXalpha"));
+    fbtreeInsert(fbt, createString("XXXXXXXXbravo"));
+    fbtreeInsert(fbt, createString("XXXXXXXXcharlie"));
+    fbtreeInsert(fbt, createString("XXXXXXXXdelta"));
+    fbtreeInsert(fbt, createString("XXXXXXXXecho"));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+
+    /* Seek to exact match within shared-prefix group */
+    sds seek_val = createString("XXXXXXXXcharlie");
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    const_sds pos;
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "XXXXXXXXcharlie", 16) == 0);
+    sdsfree(seek_val);
+
+    /* Seek to value between two shared-prefix elements */
+    fbtreeInitIterator(&it, fbt);
+    seek_val = createString("XXXXXXXXcat"); /* Between "bravo" and "charlie" suffixes */
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "XXXXXXXXcharlie", 16) == 0); /* First >= "XXXXXXXXcat" */
+    sdsfree(seek_val);
+
+    /* Prev from that position should return bravo */
+    fbtreeInitIterator(&it, fbt);
+    seek_val = createString("XXXXXXXXcat");
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    TEST_ASSERT(fbtreePrev(&it, &pos));
+    TEST_ASSERT(memcmp(pos, "XXXXXXXXbravo", 14) == 0);
+    sdsfree(seek_val);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_deep_tree) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    const int count = TEST_THREE_LEVEL_ITEMS;
+    for (int i = 0; i < count; i++) {
+        sds str = createBase26TestString("val_", "", i, 4);
+        fbtreeInsert(fbt, str);
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* Seek to middle of deep tree */
+    sds seek_mid = createBase26TestString("val_", "", count / 2, 4);
+    fbtreeSeekToValue(fbt, seek_mid, &it);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(sdscmp(pos, seek_mid) == 0);
+    sdsfree(seek_mid);
+
+    /* Seek near end */
+    sds seek_near_end = createBase26TestString("val_", "", count - 5, 4);
+    fbtreeSeekToValue(fbt, seek_near_end, &it);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(sdscmp(pos, seek_near_end) == 0);
+    sdsfree(seek_near_end);
+
+    /* Seek to first element */
+    sds seek_first = createBase26TestString("val_", "", 0, 4);
+    fbtreeSeekToValue(fbt, seek_first, &it);
+    TEST_ASSERT(fbtreeNext(&it, &pos));
+    TEST_ASSERT(sdscmp(pos, seek_first) == 0);
+    sdsfree(seek_first);
+
+    /* Seek past end */
+    sds seek_past = createString("zzz_past_end");
+    fbtreeSeekToValue(fbt, seek_past, &it);
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+    sdsfree(seek_past);
+
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+
+TEST(FbtreeTest, seek_to_value_then_iterate) {
+    size_t used_memory_before = zmalloc_used_memory();
+    fbtreeIndex *fbt = fbtreeCreate();
+
+    char buf[16];
+    const int count = 200;
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "item_%03d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    TEST_ASSERT(is_tree_valid(fbt));
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* Seek to mid-range position */
+    sds seek_val = createString("item_100");
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    /* Iterate forward from seek position to end */
+    for (int i = 100; i < count; i++) {
+        snprintf(buf, sizeof(buf), "item_%03d", i);
+        TEST_ASSERT(fbtreeNext(&it, &pos));
+        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+    }
+    TEST_ASSERT(!fbtreeNext(&it, &pos));
+
+    /* Seek again and iterate backward */
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+
+    /* Prev from position at item_100 returns item_099 */
+    for (int i = 99; i >= 0; i--) {
+        snprintf(buf, sizeof(buf), "item_%03d", i);
+        TEST_ASSERT(fbtreePrev(&it, &pos));
+        TEST_ASSERT(memcmp(pos, buf, strlen(buf) + 1) == 0);
+    }
+    TEST_ASSERT(!fbtreePrev(&it, &pos));
+
+    sdsfree(seek_val);
+    fbtreeFree(fbt);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
+}
+/* Seek positions iterator at first element >= value (forward) */
+TEST(FbtreeTest, seek_to_value_property_forward_positioning) {
+    size_t used_memory_before = zmalloc_used_memory();
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 42;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *fbt = fbtreeCreate();
+
+        /* Vary tree size across iterations to cover different depths:
+         * - Small (1-60): single leaf
+         * - Medium (61-200): two-level tree
+         * - Large (200-1500): two/three-level tree */
+        int num_elements;
+        if (iter < 50) {
+            num_elements = 1 + (rand_r(&seed) % 60); /* single leaf */
+        } else if (iter < 100) {
+            num_elements = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 140); /* two-level */
+        } else {
+            num_elements = 200 + (rand_r(&seed) % 1300); /* two/three-level */
+        }
+
+        /* Generate random strings and insert into tree, keeping a sorted copy */
+        std::vector<sds> sorted_values;
+        sorted_values.reserve(num_elements);
+
+        for (int i = 0; i < num_elements; i++) {
+            /* Generate a random value using base-26 encoding with varying prefixes */
+            size_t val = rand_r(&seed) % 50000;
+            const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
+            const char *prefix = prefixes[rand_r(&seed) % 5];
+            sds s = createBase26TestString(prefix, "", val, 4);
+            fbtreeInsert(fbt, s);
+            /* Keep a copy for verification */
+            sorted_values.push_back(sdsnewlen(s, sdslen(s)));
+        }
+
+        /* Sort the copy using sdscmp */
+        std::sort(sorted_values.begin(), sorted_values.end(), [](const sds a, const sds b) {
+            return sdscmp(a, b) < 0;
+        });
+
+        /* Generate a random seek value - mix of exact matches, between values, and beyond range */
+        sds seek_val;
+        int seek_type = rand_r(&seed) % 5;
+        if (seek_type == 0 && num_elements > 0) {
+            /* Exact match: pick a random existing element */
+            int idx = rand_r(&seed) % num_elements;
+            seek_val = sdsnewlen(sorted_values[idx], sdslen(sorted_values[idx]));
+        } else if (seek_type == 1) {
+            /* Value before all elements */
+            seek_val = createString("AAAA");
+        } else if (seek_type == 2) {
+            /* Value after all elements */
+            seek_val = createString("zzzzzzzz");
+        } else {
+            /* Random value that may fall between elements */
+            size_t val = rand_r(&seed) % 50000;
+            const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
+            const char *prefix = prefixes[rand_r(&seed) % 5];
+            seek_val = createBase26TestString(prefix, "", val, 4);
+        }
+
+        /* Find expected result: first element >= seek_val in sorted list */
+        sds expected = NULL;
+        for (size_t i = 0; i < sorted_values.size(); i++) {
+            if (sdscmp(sorted_values[i], seek_val) >= 0) {
+                expected = sorted_values[i];
+                break;
+            }
+        }
+
+        /* Seek and verify */
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        fbtreeSeekToValue(fbt, seek_val, &it);
+
+        const_sds pos;
+        bool got_next = fbtreeNext(&it, &pos);
+
+        if (expected == NULL) {
+            /* No element >= seek_val exists, fbtreeNext should return false */
+            ASSERT_FALSE(got_next) << "Iteration " << iter << ": expected no element >= seek value, but got one"
+                                   << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
+        } else {
+            /* Should return the first element >= seek_val */
+            ASSERT_TRUE(got_next) << "Iteration " << iter << ": expected element >= seek value, but got none"
+                                  << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
+            ASSERT_EQ(sdscmp(pos, expected), 0)
+                << "Iteration " << iter << ": wrong element returned"
+                << " (seek_val=" << seek_val << ", got=" << pos << ", expected=" << expected
+                << ", num_elements=" << num_elements << ")";
+        }
+
+        /* Cleanup */
+        sdsfree(seek_val);
+        for (auto &v : sorted_values) {
+            sdsfree(v);
+        }
+        fbtreeFree(fbt);
+    }
+
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
+}
+
+/* Seek positions iterator correctly for reverse iteration */
+TEST(FbtreeTest, seek_to_value_property_reverse_positioning) {
+    size_t used_memory_before = zmalloc_used_memory();
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 123;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *fbt = fbtreeCreate();
+
+        /* Vary tree size across iterations to cover different depths:
+         * - Small (1-60): single leaf
+         * - Medium (61-200): two-level tree
+         * - Large (200-1500): two/three-level tree */
+        int num_elements;
+        if (iter < 50) {
+            num_elements = 1 + (rand_r(&seed) % 60); /* single leaf */
+        } else if (iter < 100) {
+            num_elements = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 140); /* two-level */
+        } else {
+            num_elements = 200 + (rand_r(&seed) % 1300); /* two/three-level */
+        }
+
+        /* Generate random strings and insert into tree, keeping a sorted copy */
+        std::vector<sds> sorted_values;
+        sorted_values.reserve(num_elements);
+
+        for (int i = 0; i < num_elements; i++) {
+            /* Generate a random value using base-26 encoding with varying prefixes */
+            size_t val = rand_r(&seed) % 50000;
+            const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
+            const char *prefix = prefixes[rand_r(&seed) % 5];
+            sds s = createBase26TestString(prefix, "", val, 4);
+            fbtreeInsert(fbt, s);
+            /* Keep a copy for verification */
+            sorted_values.push_back(sdsnewlen(s, sdslen(s)));
+        }
+
+        /* Sort the copy using sdscmp */
+        std::sort(sorted_values.begin(), sorted_values.end(), [](const sds a, const sds b) {
+            return sdscmp(a, b) < 0;
+        });
+
+        /* Generate a random seek value - mix of exact matches, between values, and beyond range */
+        sds seek_val;
+        int seek_type = rand_r(&seed) % 5;
+        if (seek_type == 0 && num_elements > 0) {
+            /* Exact match: pick a random existing element */
+            int idx = rand_r(&seed) % num_elements;
+            seek_val = sdsnewlen(sorted_values[idx], sdslen(sorted_values[idx]));
+        } else if (seek_type == 1) {
+            /* Value before all elements */
+            seek_val = createString("AAAA");
+        } else if (seek_type == 2) {
+            /* Value after all elements */
+            seek_val = createString("zzzzzzzz");
+        } else {
+            /* Random value that may fall between elements */
+            size_t val = rand_r(&seed) % 50000;
+            const char *prefixes[] = {"aa_", "bb_", "cc_", "dd_", "ee_"};
+            const char *prefix = prefixes[rand_r(&seed) % 5];
+            seek_val = createBase26TestString(prefix, "", val, 4);
+        }
+
+        /* Find expected result for fbtreePrev: last element strictly < seek_val */
+        sds expected_prev = NULL;
+        for (int i = (int)sorted_values.size() - 1; i >= 0; i--) {
+            if (sdscmp(sorted_values[i], seek_val) < 0) {
+                expected_prev = sorted_values[i];
+                break;
+            }
+        }
+
+        /* Seek and call fbtreePrev (without calling fbtreeNext first) */
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        fbtreeSeekToValue(fbt, seek_val, &it);
+
+        const_sds pos;
+        bool got_prev = fbtreePrev(&it, &pos);
+
+        if (expected_prev == NULL) {
+            /* No element strictly < seek_val exists, fbtreePrev should return false */
+            ASSERT_FALSE(got_prev) << "Iteration " << iter << ": expected no element < seek value, but got one"
+                                   << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
+        } else {
+            /* Should return the last element strictly < seek_val */
+            ASSERT_TRUE(got_prev) << "Iteration " << iter << ": expected element < seek value, but got none"
+                                  << " (seek_val=" << seek_val << ", num_elements=" << num_elements << ")";
+            ASSERT_EQ(sdscmp(pos, expected_prev), 0)
+                << "Iteration " << iter << ": wrong element returned by fbtreePrev"
+                << " (seek_val=" << seek_val << ", got=" << pos << ", expected=" << expected_prev
+                << ", num_elements=" << num_elements << ")";
+        }
+
+        /* Cleanup */
+        sdsfree(seek_val);
+        for (auto &v : sorted_values) {
+            sdsfree(v);
+        }
+        fbtreeFree(fbt);
+    }
+
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
+}
+
+/* Shared-prefix discrimination */
+TEST(FbtreeTest, seek_to_value_property_shared_prefix_discrimination) {
+    size_t used_memory_before = zmalloc_used_memory();
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 777;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *fbt = fbtreeCreate();
+
+        /* Generate a random 8-byte prefix (same for all elements in this iteration) */
+        char prefix[9];
+        for (int j = 0; j < 8; j++) {
+            prefix[j] = 'A' + (char)(rand_r(&seed) % 26);
+        }
+        prefix[8] = '\0';
+
+        /* Generate a random number of elements (10-500) sharing this 8-byte prefix
+         * but with different suffixes of varying lengths */
+        int num_elements = 10 + (int)(rand_r(&seed) % 491);
+
+        std::vector<sds> sorted_values;
+        sorted_values.reserve(num_elements);
+
+        for (int i = 0; i < num_elements; i++) {
+            /* Create suffix with varying length (1-12 bytes) and random content */
+            int suffix_len = 1 + (int)(rand_r(&seed) % 12);
+            sds s = sdsnewlen(NULL, 8 + suffix_len + 1); /* prefix + suffix + null terminator */
+            memcpy(s, prefix, 8);
+            for (int k = 0; k < suffix_len; k++) {
+                s[8 + k] = 'a' + (char)(rand_r(&seed) % 26);
+            }
+            s[8 + suffix_len] = '\0';
+
+            fbtreeInsert(fbt, s);
+            /* Keep a copy for verification */
+            sorted_values.push_back(sdsnewlen(s, sdslen(s)));
+        }
+
+        /* Sort the copy using sdscmp (full sds comparison) */
+        std::sort(sorted_values.begin(), sorted_values.end(), [](const sds a, const sds b) {
+            return sdscmp(a, b) < 0;
+        });
+
+        /* Generate a random seek value with the SAME 8-byte prefix but a random suffix */
+        int seek_suffix_len = 1 + (int)(rand_r(&seed) % 12);
+        sds seek_val = sdsnewlen(NULL, 8 + seek_suffix_len + 1);
+        memcpy(seek_val, prefix, 8);
+        for (int k = 0; k < seek_suffix_len; k++) {
+            seek_val[8 + k] = 'a' + (char)(rand_r(&seed) % 26);
+        }
+        seek_val[8 + seek_suffix_len] = '\0';
+
+        /* Find expected result: first element whose FULL value is >= seek_val */
+        sds expected = NULL;
+        for (size_t i = 0; i < sorted_values.size(); i++) {
+            if (sdscmp(sorted_values[i], seek_val) >= 0) {
+                expected = sorted_values[i];
+                break;
+            }
+        }
+
+        /* Seek and verify - this proves the function discriminates based on
+         * full sds comparison, not just the 8-byte prefix */
+        fbtreeIterator it;
+        fbtreeInitIterator(&it, fbt);
+        fbtreeSeekToValue(fbt, seek_val, &it);
+
+        const_sds pos;
+        bool got_next = fbtreeNext(&it, &pos);
+
+        if (expected == NULL) {
+            /* No element >= seek_val exists (seek suffix is past all suffixes) */
+            ASSERT_FALSE(got_next) << "Iteration " << iter << ": expected no element >= seek value, but got one"
+                                   << " (prefix=" << prefix << ", num_elements=" << num_elements << ")";
+        } else {
+            /* Should return the first element whose full value >= seek_val */
+            ASSERT_TRUE(got_next) << "Iteration " << iter << ": expected element >= seek value, but got none"
+                                  << " (prefix=" << prefix << ", seek_val=" << seek_val
+                                  << ", num_elements=" << num_elements << ")";
+            ASSERT_EQ(sdscmp(pos, expected), 0)
+                << "Iteration " << iter << ": wrong element returned - full value comparison not used"
+                << " (prefix=" << prefix << ", seek_val=" << seek_val << ", got=" << pos
+                << ", expected=" << expected << ", num_elements=" << num_elements << ")";
+
+            /* Verify the element before (if any) is strictly < seek_val.
+             * This confirms we got the FIRST element >= seek_val, not just any. */
+            fbtreeInitIterator(&it, fbt);
+            fbtreeSeekToValue(fbt, seek_val, &it);
+            const_sds prev_pos;
+            bool got_prev = fbtreePrev(&it, &prev_pos);
+            if (got_prev) {
+                ASSERT_LT(sdscmp(prev_pos, seek_val), 0)
+                    << "Iteration " << iter << ": element before seek position is not < seek value"
+                    << " (prefix=" << prefix << ", prev=" << prev_pos << ", seek_val=" << seek_val << ")";
+            }
+        }
+
+        /* Cleanup */
+        sdsfree(seek_val);
+        for (auto &v : sorted_values) {
+            sdsfree(v);
+        }
+        fbtreeFree(fbt);
+    }
+
+    ASSERT_EQ(zmalloc_used_memory(), used_memory_before);
 }
