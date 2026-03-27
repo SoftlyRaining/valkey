@@ -57,6 +57,35 @@ def parse_benchmark_output(text: str) -> list[BenchmarkResult]:
             items_per_sec=ips,
         ))
 
+    # Pattern for insert/delete/pop: Fbtree_Cold_Insert/Random/128/24 ...
+    mut_pattern = re.compile(
+        r"^(Fbtree|Skiplist)_Cold_(Insert|Delete|PopHead|PopTail)/(\w+)/(\d+)/\d+\s+"
+        r"([\d.]+)\s+ns\s+.*?items_per_second=([\d.]+)([kMG])?/s",
+        re.MULTILINE
+    )
+
+    for m in mut_pattern.finditer(text):
+        struct, category, variation, count, time_ns, ips, ips_unit = m.groups()
+        ips = float(ips)
+        if ips_unit == "k":
+            ips *= 1e3
+        elif ips_unit == "M":
+            ips *= 1e6
+        elif ips_unit == "G":
+            ips *= 1e9
+        # Map to operation names expected by plot functions:
+        # Insert/Random -> InsertRandom, Delete/Random -> DeleteRandom,
+        # PopHead/Pop -> PopHead, PopTail/Pop -> PopTail
+        if category in ("PopHead", "PopTail"):
+            op = category
+        else:
+            op = category + variation  # e.g. "InsertRandom", "DeleteRandom"
+        results.append(BenchmarkResult(
+            structure=struct, operation=op,
+            item_count=int(count), time_ns=float(time_ns),
+            items_per_sec=ips,
+        ))
+
     return results
 
 

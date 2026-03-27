@@ -298,7 +298,7 @@ static void ZsetCountArgs(::benchmark::Benchmark *b) {
 }
 
 static void StandardCountArgs(::benchmark::Benchmark *b) {
-    for (int64_t n = 8; n <= 4'194'304; n *= 2) b->Args({n});
+    for (int64_t n = 8; n <= 262'144; n *= 2) b->Args({n});
 }
 
 BENCHMARK(BM_Dict_Mem_BySize)->Args({16})->Args({64})->Args({512})->Iterations(1);

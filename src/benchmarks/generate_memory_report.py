@@ -117,8 +117,8 @@ def plot_overhead_by_count(results: list[MemoryResult], filename: str):
 
     ax.axvline(x=128, color="gray", linestyle="--", linewidth=1, alpha=0.7, label="Listpack threshold")
 
-    sizes = [8, 64, 512, 4096, 32768, 262144, 2097152]
-    labels = ["8", "64", "512", "4K", "32K", "256K", "2M"]
+    sizes = [8, 64, 512, 4096, 32768, 262144]
+    labels = ["8", "64", "512", "4K", "32K", "256K"]
     setup_log_axis(ax, sizes, labels)
 
     ax.set_xlabel("Item Count", fontsize=12)
