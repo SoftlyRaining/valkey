@@ -42,6 +42,11 @@ void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iter
  * If all elements have value < given value, iterator is positioned past end. */
 void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterator);
 
+/* Range deletion */
+unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt, unsigned long start_rank, unsigned long end_rank);
+unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt, const char *min_score, const char *max_score, int min_ex, int max_ex);
+unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt, const_sds min_val, const_sds max_val, int min_ex, int max_ex);
+
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
 

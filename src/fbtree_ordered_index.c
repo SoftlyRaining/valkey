@@ -29,10 +29,10 @@
  * 32-bit: uses same logical fanout, smaller nodes due to 4-byte pointers */
 #define NODE_SIZE 61
 
-#if SIZE_MAX == UINT64_MAX /* 64-bit */
-#define EMBED_PREFIX_LEN 54 /* Tuned to fit innerNode in 1792-byte jemalloc size class */
+#if SIZE_MAX == UINT64_MAX   /* 64-bit */
+#define EMBED_PREFIX_LEN 54  /* Tuned to fit innerNode in 1792-byte jemalloc size class */
 #elif SIZE_MAX == UINT32_MAX /* 32-bit */
-#define EMBED_PREFIX_LEN 30 /* Tuned to fit innerNode exactly in 1024-byte jemalloc size class */
+#define EMBED_PREFIX_LEN 30  /* Tuned to fit innerNode exactly in 1024-byte jemalloc size class */
 #endif
 
 #define MIN_FILL (NODE_SIZE / 4) /* Minimum items before node underflows */
@@ -1370,6 +1370,130 @@ void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterat
         /* At first element of tree - nothing before this */
         it->state = ITER_BEFORE_START;
     }
+}
+
+/* ========== Range Deletion ========== */
+
+/* Delete elements at ranks [start_rank, end_rank] (0-indexed, inclusive).
+ * Naive implementation: collect pointers, then delete one by one.
+ * Returns the number of elements deleted. */
+unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt, unsigned long start_rank, unsigned long end_rank) {
+    if (!fbt->root) return 0;
+
+    unsigned long length = fbtreeLength(fbt);
+    if (start_rank >= length) return 0;
+    if (end_rank >= length) end_rank = length - 1;
+    if (start_rank > end_rank) return 0;
+
+    unsigned long count = end_rank - start_rank + 1;
+
+    /* Collect pointers to items in the range via iteration */
+    sds *to_delete = zmalloc(count * sizeof(sds));
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToRank(&it, start_rank);
+
+    const_sds pos;
+    unsigned long collected = 0;
+    while (collected < count && fbtreeNext(&it, &pos)) {
+        to_delete[collected++] = (sds)pos;
+    }
+
+    /* Delete each collected item. fbtreeDelete finds by pointer and frees the sds. */
+    for (unsigned long i = 0; i < collected; i++) {
+        fbtreeDelete(fbt, to_delete[i]);
+    }
+
+    zfree(to_delete);
+    return collected;
+}
+
+/* Delete elements with score prefix in [min_score, max_score].
+ * min_ex/max_ex: if true, the corresponding bound is exclusive.
+ * Score is an 8-byte big-endian normalized prefix (as stored in the tree).
+ * Returns the number of elements deleted. */
+unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
+                                       const char *min_score,
+                                       const char *max_score,
+                                       int min_ex,
+                                       int max_ex) {
+    if (!fbt->root) return 0;
+
+    /* Seek to first element >= min_score */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, min_score, (fbtreeIterator *)&it);
+
+    /* Collect items in range */
+    size_t capacity = 64;
+    sds *to_delete = zmalloc(capacity * sizeof(sds));
+    unsigned long count = 0;
+
+    const_sds pos;
+    while (fbtreeNext(&it, &pos)) {
+        int cmp_min = memcmp(pos, min_score, SCORE_SIZE);
+        if (min_ex && cmp_min == 0) continue; /* skip elements equal to exclusive min */
+
+        int cmp_max = memcmp(pos, max_score, SCORE_SIZE);
+        if (max_ex ? cmp_max >= 0 : cmp_max > 0) break; /* past max bound */
+
+        if (count == capacity) {
+            capacity *= 2;
+            to_delete = zrealloc(to_delete, capacity * sizeof(sds));
+        }
+        to_delete[count++] = (sds)pos;
+    }
+
+    /* Delete each collected item. fbtreeDelete finds by pointer and frees the sds. */
+    for (unsigned long i = 0; i < count; i++) {
+        fbtreeDelete(fbt, to_delete[i]);
+    }
+
+    zfree(to_delete);
+    return count;
+}
+
+/* Delete elements with value in [min_val, max_val] using full sds comparison.
+ * min_ex/max_ex: if true, the corresponding bound is exclusive.
+ * Returns the number of elements deleted. */
+unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt,
+                                       const_sds min_val,
+                                       const_sds max_val,
+                                       int min_ex,
+                                       int max_ex) {
+    if (!fbt->root) return 0;
+
+    /* Seek to first element >= min_val */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, min_val, &it);
+
+    /* Collect items in range */
+    size_t capacity = 64;
+    sds *to_delete = zmalloc(capacity * sizeof(sds));
+    unsigned long count = 0;
+
+    const_sds pos;
+    while (fbtreeNext(&it, &pos)) {
+        int cmp_min = sdscmp(pos, min_val);
+        if (min_ex && cmp_min == 0) continue;
+
+        int cmp_max = sdscmp(pos, max_val);
+        if (max_ex ? cmp_max >= 0 : cmp_max > 0) break;
+
+        if (count == capacity) {
+            capacity *= 2;
+            to_delete = zrealloc(to_delete, capacity * sizeof(sds));
+        }
+        to_delete[count++] = (sds)pos;
+    }
+
+    for (unsigned long i = 0; i < count; i++) {
+        fbtreeDelete(fbt, to_delete[i]);
+    }
+
+    zfree(to_delete);
+    return count;
 }
 
 /* ========== Debug Functions ========== */

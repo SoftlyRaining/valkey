@@ -129,21 +129,13 @@ static void zsetFbtreeFreeItem(OrderedIndexItem *item) {
 }
 
 static unsigned long zsetFbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
-    UNUSED(idx);
-    UNUSED(min);
-    UNUSED(max);
-    UNUSED(min_ex);
-    UNUSED(max_ex);
-    assert(false); /* TODO: implement using score prefix iteration */
-    return 0;
+    uint64_t min_sortable = scoreToSortable(min);
+    uint64_t max_sortable = scoreToSortable(max);
+    return fbtreeDeleteRangeByScore((fbtreeIndex *)idx, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex);
 }
 
 static unsigned long zsetFbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    UNUSED(idx);
-    UNUSED(start);
-    UNUSED(end);
-    assert(false); /* TODO: implement using rank-based iteration + delete */
-    return 0;
+    return fbtreeDeleteRangeByRank((fbtreeIndex *)idx, start, end);
 }
 
 static unsigned long zsetFbtreeLength(OrderedIndex *idx) {
@@ -151,15 +143,11 @@ static unsigned long zsetFbtreeLength(OrderedIndex *idx) {
 }
 
 static OrderedIndexItem *zsetFbtreeGetByRank(OrderedIndex *idx, unsigned long rank) {
-    /* Interface uses 1-based ranks, fbtree uses 0-based */
-    if (rank == 0) return NULL;
-    return (OrderedIndexItem *)fbtreeGetAtRank((fbtreeIndex *)idx, rank - 1);
+    return (OrderedIndexItem *)fbtreeGetAtRank((fbtreeIndex *)idx, rank);
 }
 
 static long zsetFbtreeGetRank(OrderedIndex *idx, const OrderedIndexItem *pos) {
-    /* fbtree returns 0-based rank, interface expects 1-based */
-    long rank = fbtreeGetRankOfItem((fbtreeIndex *)idx, (const_sds)pos);
-    return (rank >= 0) ? rank + 1 : rank;
+    return fbtreeGetRankOfItem((fbtreeIndex *)idx, (const_sds)pos);
 }
 
 static void zsetFbtreeGetElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) {
@@ -187,7 +175,6 @@ static bool zsetFbtreePrev(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
 }
 
 static void zsetFbtreeSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    /* Interface rank N positions iterator so next() returns rank N+1 */
     fbtreeSeekToRank((fbtreeIterator *)iter, rank);
 }
 

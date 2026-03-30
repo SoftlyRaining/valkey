@@ -2714,3 +2714,630 @@ TEST_F(FbtreeTest, SeekToValuePropertySharedPrefixDiscrimination) {
         fbtreeFree(tree);
     }
 }
+
+/* ========== fbtreeDeleteRangeByRank Tests ========== */
+
+TEST_F(FbtreeTest, DeleteRangeByRankEmpty) {
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 0), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankSingle) {
+    insert("a");
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 0), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankAll) {
+    for (int i = 0; i < 10; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 9), 10u);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankMiddle) {
+    for (int i = 0; i < 10; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    /* Delete ranks 3..6 (4 elements: AAD, AAE, AAF, AAG) */
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 6), 4u);
+    EXPECT_EQ(fbtreeLength(fbt), 6u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 6u);
+    /* Element just before deleted range (was rank 2) should survive */
+    EXPECT_EQ(remaining[2], std::string("AAC\0", 4));
+    /* Element just after deleted range (was rank 7) should now be at rank 3 */
+    EXPECT_EQ(remaining[3], std::string("AAH\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankFirst) {
+    for (int i = 0; i < 10; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 2), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 7u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 7u);
+    /* First surviving element should be what was rank 3 (AAD) */
+    EXPECT_EQ(remaining[0], std::string("AAD\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankLast) {
+    for (int i = 0; i < 10; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 7, 9), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 7u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 7u);
+    /* Last surviving element should be what was rank 6 (AAG) */
+    EXPECT_EQ(remaining[6], std::string("AAG\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankOutOfBounds) {
+    for (int i = 0; i < 5; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    /* end_rank beyond length - should clamp */
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 100), 2u);
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 3u);
+    /* Last surviving element should be what was rank 2 (AAC) */
+    EXPECT_EQ(remaining[2], std::string("AAC\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankStartBeyondLength) {
+    for (int i = 0; i < 5; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 10, 20), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 5u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankInvertedRange) {
+    for (int i = 0; i < 5; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    /* start > end should delete nothing */
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 1), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 5u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankMultilevel) {
+    /* Build a tree with enough elements to have multiple inner node levels */
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("key_", "", i, 5));
+    }
+    expectValid();
+
+    /* Delete a range spanning multiple leaves */
+    unsigned long start = TEST_NODE_CAPACITY / 2;
+    unsigned long end = TEST_NODE_CAPACITY * 2 + TEST_NODE_CAPACITY / 2;
+    unsigned long expected = end - start + 1;
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, start, end), expected);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - expected));
+    expectValid();
+
+    /* Verify iteration still works */
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), (size_t)(N - expected));
+    auto backward = collectBackward();
+    EXPECT_EQ(backward.size(), remaining.size());
+
+    /* Verify boundary elements survived */
+    sds expected_before = createBase26TestString("key_", "", start - 1, 5);
+    sds expected_after = createBase26TestString("key_", "", end + 1, 5);
+    EXPECT_EQ(remaining[start - 1], std::string(expected_before, sdslen(expected_before)));
+    EXPECT_EQ(remaining[start], std::string(expected_after, sdslen(expected_after)));
+    sdsfree(expected_before);
+    sdsfree(expected_after);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankThenInsert) {
+    for (int i = 0; i < 20; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 5, 14), 10u);
+    EXPECT_EQ(fbtreeLength(fbt), 10u);
+    expectValid();
+
+    /* Insert new elements after range delete */
+    for (int i = 100; i < 110; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    EXPECT_EQ(fbtreeLength(fbt), 20u);
+    expectValid();
+
+    auto all = collectForward();
+    EXPECT_EQ(all.size(), 20u);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByRankDeepTree) {
+    /* Build a 3+ level tree */
+    const int N = TEST_THREE_LEVEL_ITEMS;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("deep_", "", i, 6));
+    }
+    expectValid();
+
+    /* Delete a large chunk from the middle */
+    unsigned long mid = N / 3;
+    unsigned long end = 2 * N / 3;
+    unsigned long expected = end - mid + 1;
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, mid, end), expected);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - expected));
+    expectValid();
+}
+
+/* ========== fbtreeDeleteRangeByScore Tests ========== */
+
+TEST_F(FbtreeTest, DeleteRangeByScoreEmpty) {
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "ZZZZZZZZ", 0, 0), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreAll) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    /* Range covers all scores */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "CCCCCCCC", 0, 0), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreMiddle) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+    fbtreeInsert(fbt, createString("DDDDDDDDelem_3"));
+    fbtreeInsert(fbt, createString("EEEEEEEEelem_4"));
+
+    /* Delete B and C scores */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0), 2u);
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 3u);
+    EXPECT_EQ(memcmp(remaining[0].data(), "AAAAAAAA", 8), 0);
+    EXPECT_EQ(memcmp(remaining[1].data(), "DDDDDDDD", 8), 0);
+    EXPECT_EQ(memcmp(remaining[2].data(), "EEEEEEEE", 8), 0);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreExclusiveMin) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    /* Exclusive min: should skip B, only delete C */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 1, 0), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(memcmp(remaining[0].data(), "AAAAAAAA", 8), 0);
+    EXPECT_EQ(memcmp(remaining[1].data(), "BBBBBBBB", 8), 0);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreExclusiveMax) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    /* Exclusive max: should skip C, only delete B */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 1), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(memcmp(remaining[0].data(), "AAAAAAAA", 8), 0);
+    EXPECT_EQ(memcmp(remaining[1].data(), "CCCCCCCC", 8), 0);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreBothExclusive) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+    fbtreeInsert(fbt, createString("DDDDDDDDelem_3"));
+
+    /* Both exclusive on B..D: should only delete C */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "DDDDDDDD", 1, 1), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 3u);
+    EXPECT_EQ(memcmp(remaining[0].data(), "AAAAAAAA", 8), 0);
+    EXPECT_EQ(memcmp(remaining[1].data(), "BBBBBBBB", 8), 0);
+    EXPECT_EQ(memcmp(remaining[2].data(), "DDDDDDDD", 8), 0);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreNoMatch) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("DDDDDDDDelem_1"));
+
+    /* Range between existing scores - nothing to delete */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScorePastEnd) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+
+    /* Range entirely beyond all elements */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "YYYYYYYY", "ZZZZZZZZ", 0, 0), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreBeforeStart) {
+    fbtreeInsert(fbt, createString("MMMMMMMMelem_0"));
+    fbtreeInsert(fbt, createString("NNNNNNNNelem_1"));
+
+    /* Range entirely before all elements */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "BBBBBBBB", 0, 0), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreDuplicateScores) {
+    /* Multiple elements with same score prefix but different suffixes */
+    fbtreeInsert(fbt, createString("BBBBBBBBaaa"));
+    fbtreeInsert(fbt, createString("BBBBBBBBbbb"));
+    fbtreeInsert(fbt, createString("BBBBBBBBccc"));
+    fbtreeInsert(fbt, createString("CCCCCCCCddd"));
+
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "BBBBBBBB", 0, 0), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(memcmp(remaining[0].data(), "CCCCCCCC", 8), 0);
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreMultilevel) {
+    /* Build a multilevel tree with score-prefixed elements */
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        /* Create 8-byte score prefix from index, then element suffix */
+        char score[9];
+        snprintf(score, sizeof(score), "%08d", i);
+        sds s = sdsnewlen(NULL, 8 + 6 + 1);
+        memcpy(s, score, 8);
+        snprintf(s + 8, 7, "elem%c", '\0');
+        s[8 + 6] = '\0';
+        fbtreeInsert(fbt, s);
+    }
+    expectValid();
+
+    /* Delete a range in the middle */
+    char min_score[9], max_score[9];
+    snprintf(min_score, sizeof(min_score), "%08d", N / 4);
+    snprintf(max_score, sizeof(max_score), "%08d", 3 * N / 4);
+
+    unsigned long before = fbtreeLength(fbt);
+    unsigned long deleted = fbtreeDeleteRangeByScore(fbt, min_score, max_score, 0, 0);
+    EXPECT_GT(deleted, 0u);
+    EXPECT_EQ(fbtreeLength(fbt), before - deleted);
+    expectValid();
+
+    /* Verify iteration still works correctly */
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), (size_t)(before - deleted));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreThenInsert) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+    fbtreeInsert(fbt, createString("DDDDDDDDelem_3"));
+
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0), 2u);
+    expectValid();
+
+    /* Insert into the gap */
+    fbtreeInsert(fbt, createString("BBBBBBBBnew_elem"));
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
+
+    auto all = collectForward();
+    EXPECT_EQ(all.size(), 3u);
+    EXPECT_EQ(memcmp(all[0].data(), "AAAAAAAA", 8), 0);
+    EXPECT_EQ(memcmp(all[1].data(), "BBBBBBBB", 8), 0);
+    EXPECT_EQ(memcmp(all[2].data(), "DDDDDDDD", 8), 0);
+}
+
+/* ========== fbtreeDeleteRangeByValue Tests ========== */
+
+TEST_F(FbtreeTest, DeleteRangeByValueEmpty) {
+    sds min_val = createString("aaa");
+    sds max_val = createString("zzz");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 0u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueAll) {
+    insert("bbb");
+    insert("ccc");
+    insert("ddd");
+
+    sds min_val = createString("aaa");
+    sds max_val = createString("eee");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueMiddle) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+    insert("ddd");
+    insert("eee");
+
+    sds min_val = createString("bbb");
+    sds max_val = createString("ddd");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 2u);
+    EXPECT_EQ(remaining[0], std::string("aaa\0", 4));
+    EXPECT_EQ(remaining[1], std::string("eee\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueExclusiveMin) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+
+    sds min_val = createString("aaa");
+    sds max_val = createString("ccc");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 0), 2u);
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 1u);
+    EXPECT_EQ(remaining[0], std::string("aaa\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueExclusiveMax) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+
+    sds min_val = createString("aaa");
+    sds max_val = createString("ccc");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 1), 2u);
+    EXPECT_EQ(fbtreeLength(fbt), 1u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 1u);
+    EXPECT_EQ(remaining[0], std::string("ccc\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueBothExclusive) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+    insert("ddd");
+
+    sds min_val = createString("aaa");
+    sds max_val = createString("ddd");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 1), 2u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 2u);
+    EXPECT_EQ(remaining[0], std::string("aaa\0", 4));
+    EXPECT_EQ(remaining[1], std::string("ddd\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueNoMatch) {
+    insert("aaa");
+    insert("ddd");
+
+    sds min_val = createString("bbb");
+    sds max_val = createString("ccc");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueExactMatch) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+
+    /* min == max, inclusive: delete exactly one element */
+    sds val = createString("bbb");
+    sds val2 = createString("bbb");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, val, val2, 0, 0), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    sdsfree(val);
+    sdsfree(val2);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 2u);
+    EXPECT_EQ(remaining[0], std::string("aaa\0", 4));
+    EXPECT_EQ(remaining[1], std::string("ccc\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueExactMatchExclusive) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+
+    /* min == max, both exclusive: delete nothing */
+    sds val = createString("bbb");
+    sds val2 = createString("bbb");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, val, val2, 1, 1), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    sdsfree(val);
+    sdsfree(val2);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 3u);
+    EXPECT_EQ(remaining[0], std::string("aaa\0", 4));
+    EXPECT_EQ(remaining[1], std::string("bbb\0", 4));
+    EXPECT_EQ(remaining[2], std::string("ccc\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("val_", "", i, 5));
+    }
+    expectValid();
+
+    /* Delete a range in the middle using value comparison */
+    sds min_val = createBase26TestString("val_", "", N / 4, 5);
+    sds max_val = createBase26TestString("val_", "", 3 * N / 4, 5);
+
+    unsigned long before = fbtreeLength(fbt);
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0);
+    EXPECT_GT(deleted, 0u);
+    EXPECT_EQ(fbtreeLength(fbt), before - deleted);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), (size_t)(before - deleted));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueWithScorePrefix) {
+    /* Simulate the adapter pattern: [8-byte score][element] */
+    fbtreeInsert(fbt, createString("SCOREAAAbbb"));
+    fbtreeInsert(fbt, createString("SCOREAAAccc"));
+    fbtreeInsert(fbt, createString("SCOREAAAddd"));
+    fbtreeInsert(fbt, createString("SCOREAAAeee"));
+    fbtreeInsert(fbt, createString("SCOREAAAfff"));
+
+    /* Delete lex range [ccc, eee] within the same score prefix */
+    sds min_val = createString("SCOREAAAccc");
+    sds max_val = createString("SCOREAAAeee");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 3u);
+    EXPECT_EQ(fbtreeLength(fbt), 2u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 2u);
+    EXPECT_EQ(remaining[0], std::string("SCOREAAAbbb\0", 12));
+    EXPECT_EQ(remaining[1], std::string("SCOREAAAfff\0", 12));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueThenInsert) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+    insert("ddd");
+
+    sds min_val = createString("bbb");
+    sds max_val = createString("ccc");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 2u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    insert("bbb");
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
+
+    auto all = collectForward();
+    EXPECT_EQ(all.size(), 3u);
+    EXPECT_EQ(all[0], std::string("aaa\0", 4));
+    EXPECT_EQ(all[1], std::string("bbb\0", 4));
+    EXPECT_EQ(all[2], std::string("ddd\0", 4));
+}
+
+
+TEST_F(FbtreeTest, DeleteRangeByRankSingleMiddle) {
+    for (int i = 0; i < 5; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    /* Delete exactly one element at rank 2 */
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 2, 2), 1u);
+    EXPECT_EQ(fbtreeLength(fbt), 4u);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 4u);
+    EXPECT_EQ(remaining[0], std::string("AAA\0", 4));
+    EXPECT_EQ(remaining[1], std::string("AAB\0", 4));
+    EXPECT_EQ(remaining[2], std::string("AAD\0", 4));
+    EXPECT_EQ(remaining[3], std::string("AAE\0", 4));
+}
+
+TEST_F(FbtreeTest, DeleteRangeByScoreAdjacentExclusive) {
+    fbtreeInsert(fbt, createString("AAAAAAAAelem_0"));
+    fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
+    fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
+
+    /* Both exclusive on adjacent scores B..C: nothing between them */
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 1, 1), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    expectValid();
+}
+
+TEST_F(FbtreeTest, DeleteRangeByValueAdjacentExclusive) {
+    insert("aaa");
+    insert("bbb");
+    insert("ccc");
+
+    /* Both exclusive on adjacent values: nothing between bbb and ccc */
+    sds min_val = createString("bbb");
+    sds max_val = createString("ccc");
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 1), 0u);
+    EXPECT_EQ(fbtreeLength(fbt), 3u);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), 3u);
+    EXPECT_EQ(remaining[0], std::string("aaa\0", 4));
+    EXPECT_EQ(remaining[1], std::string("bbb\0", 4));
+    EXPECT_EQ(remaining[2], std::string("ccc\0", 4));
+}

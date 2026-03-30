@@ -146,15 +146,15 @@ static void test_rank_operations_generic(const OrderedIndexOps *ops) {
         sdsfree(ele);
     }
 
-    /* Test get_rank */
+    /* Test get_rank (0-based) */
     for (int i = 0; i < 10; i++) {
         unsigned long rank = orderedIndexGetRank(ops, idx, nodes[i]);
-        TEST_ASSERT(rank == (unsigned long)(i + 1)); /* 1-based */
+        TEST_ASSERT(rank == (unsigned long)i);
     }
 
-    /* Test get_by_rank */
+    /* Test get_by_rank (0-based) */
     for (int i = 0; i < 10; i++) {
-        OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, i + 1);
+        OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, i);
         TEST_ASSERT(node == nodes[i]);
     }
 
@@ -364,8 +364,8 @@ static void test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
         sdsfree(ele);
     }
 
-    /* Delete ranks 3-5 (1-based, so elements at scores 2,3,4) */
-    unsigned long deleted = orderedIndexDeleteRangeByRank(ops, idx, 3, 5);
+    /* Delete ranks 2-4 (0-based inclusive, so elements at scores 2,3,4) */
+    unsigned long deleted = orderedIndexDeleteRangeByRank(ops, idx, 2, 4);
     TEST_ASSERT(deleted == 3);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 7);
 
@@ -377,8 +377,8 @@ static void test_delete_range_by_rank_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 0.0);
     orderedIndexResetIterator(ops, &iter);
 
-    /* Verify rank 3 is now score 5 (was rank 6) */
-    OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, 3);
+    /* Verify rank 2 is now score 5 (was rank 5 before delete) */
+    OrderedIndexItem *node = orderedIndexGetByRank(ops, idx, 2);
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, node), 5.0);
 
     orderedIndexFree(ops, idx);
@@ -407,11 +407,11 @@ static void test_mixed_operations_rank_integrity_generic(const OrderedIndexOps *
     if (nodes[10]) nodes[10] = orderedIndexUpdateScore(ops, idx, nodes[10], 150.0);
     if (nodes[20]) nodes[20] = orderedIndexUpdateScore(ops, idx, nodes[20], 160.0);
 
-    /* Verify all ranks are correct by forward traversal */
+    /* Verify all ranks are correct by forward traversal (0-based) */
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
     orderedIndexInitIterator(ops, &iter, idx);
-    unsigned long expected_rank = 1;
+    unsigned long expected_rank = 0;
     while (orderedIndexNext(ops, &iter, &pos)) {
         unsigned long actual_rank = orderedIndexGetRank(ops, idx, pos);
         TEST_ASSERT(actual_rank == expected_rank);
@@ -646,7 +646,7 @@ static void test_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));
     TEST_ASSERT(!orderedIndexPrev(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
-    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 1) == NULL);
+    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 0) == NULL);
 
     orderedIndexFree(ops, idx);
 }
@@ -705,16 +705,13 @@ static void test_rank_edge_cases_generic(const OrderedIndexOps *ops) {
         sdsfree(ele);
     }
 
-    /* Rank 0 returns header node (not NULL, not first element - implementation quirk)
-     * We don't test this as it's an implementation detail that shouldn't be relied upon */
-
     /* Rank beyond length returns NULL */
-    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 6) == NULL);
+    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 5) == NULL);
     TEST_ASSERT(orderedIndexGetByRank(ops, idx, 100) == NULL);
 
-    /* Valid boundary ranks */
-    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 1) != NULL);
-    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 5) != NULL);
+    /* Valid boundary ranks (0-based) */
+    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 0) != NULL);
+    TEST_ASSERT(orderedIndexGetByRank(ops, idx, 4) != NULL);
 
     orderedIndexFree(ops, idx);
 }
@@ -750,7 +747,7 @@ static void test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     }
 
     /* Update first element to move backward (should stay first) */
-    OrderedIndexItem *first = orderedIndexGetByRank(ops, idx, 1);
+    OrderedIndexItem *first = orderedIndexGetByRank(ops, idx, 0);
     OrderedIndexItem *updated = orderedIndexUpdateScore(ops, idx, first, -1.0);
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), -1.0);
     OrderedIndexIterator iter;
@@ -762,7 +759,7 @@ static void test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
 
     /* Update last element to move forward */
     unsigned long len = orderedIndexLength(ops, idx);
-    OrderedIndexItem *last = orderedIndexGetByRank(ops, idx, len);
+    OrderedIndexItem *last = orderedIndexGetByRank(ops, idx, len - 1);
     updated = orderedIndexUpdateScore(ops, idx, last, 10.0);
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 10.0);
     orderedIndexInitIterator(ops, &iter, idx);
@@ -771,7 +768,7 @@ static void test_update_score_edge_cases_generic(const OrderedIndexOps *ops) {
     orderedIndexResetIterator(ops, &iter);
 
     /* Update middle element to move backward */
-    OrderedIndexItem *middle = orderedIndexGetByRank(ops, idx, 3);
+    OrderedIndexItem *middle = orderedIndexGetByRank(ops, idx, 2);
     double old_score = orderedIndexGetScore(ops, middle);
     updated = orderedIndexUpdateScore(ops, idx, middle, 0.5);
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, updated), 0.5);
@@ -802,8 +799,8 @@ static void test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(deleted == 0);
     TEST_ASSERT(orderedIndexLength(ops, idx) == 10);
 
-    /* Delete first elements by rank */
-    deleted = orderedIndexDeleteRangeByRank(ops, idx, 1, 2);
+    /* Delete first elements by rank (0-based) */
+    deleted = orderedIndexDeleteRangeByRank(ops, idx, 0, 1);
     TEST_ASSERT(deleted == 2);
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
@@ -812,9 +809,9 @@ static void test_range_delete_edge_cases_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 2.0);
     orderedIndexResetIterator(ops, &iter);
 
-    /* Delete last elements by rank */
+    /* Delete last elements by rank (0-based) */
     unsigned long len = orderedIndexLength(ops, idx);
-    deleted = orderedIndexDeleteRangeByRank(ops, idx, len - 1, len);
+    deleted = orderedIndexDeleteRangeByRank(ops, idx, len - 2, len - 1);
     TEST_ASSERT(deleted == 2);
     orderedIndexInitIterator(ops, &iter, idx);
     TEST_ASSERT(orderedIndexPrev(ops, &iter, &pos));
@@ -872,7 +869,7 @@ static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     OrderedIndexIterator iter;
     OrderedIndexItem *pos;
 
-    /* Seek to rank 0 (before first) - next should return rank 1, prev should return NULL */
+    /* Seek to rank 0 - next should return rank 0 (score 1.0), prev should return NULL */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 0);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
@@ -884,7 +881,7 @@ static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT(!orderedIndexPrev(ops, &iter, &pos));
     orderedIndexResetIterator(ops, &iter);
 
-    /* Seek to rank 1 - next should return rank 2, prev should return rank 1 */
+    /* Seek to rank 1 - next should return rank 1 (score 2.0), prev should return rank 0 (score 1.0) */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 1);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
@@ -897,7 +894,7 @@ static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 1.0);
     orderedIndexResetIterator(ops, &iter);
 
-    /* Seek to rank 3 (middle) - next should return rank 4, prev should return rank 3 */
+    /* Seek to rank 3 (middle) - next should return rank 3 (score 4.0), prev should return rank 2 (score 3.0) */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 3);
     TEST_ASSERT(orderedIndexNext(ops, &iter, &pos));
@@ -910,7 +907,7 @@ static void test_seek_to_rank_generic(const OrderedIndexOps *ops) {
     TEST_ASSERT_SCORE_EQ(orderedIndexGetScore(ops, pos), 3.0);
     orderedIndexResetIterator(ops, &iter);
 
-    /* Seek to rank 5 (last) - next should return NULL, prev should return rank 5 */
+    /* Seek to rank 5 (past end) - next should return NULL, prev should return rank 4 (score 5.0) */
     orderedIndexInitIterator(ops, &iter, idx);
     orderedIndexSeekToRank(ops, &iter, 5);
     TEST_ASSERT(!orderedIndexNext(ops, &iter, &pos));

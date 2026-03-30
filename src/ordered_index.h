@@ -22,12 +22,12 @@ typedef struct OrderedIndexOps {
     OrderedIndexItem *(*pop_last)(OrderedIndex *idx);
     void (*free_item)(OrderedIndexItem *item);
     unsigned long (*delete_range_by_score)(OrderedIndex *idx, double min, double max, int min_ex, int max_ex);
-    unsigned long (*delete_range_by_rank)(OrderedIndex *idx, unsigned long start, unsigned long end);
+    unsigned long (*delete_range_by_rank)(OrderedIndex *idx, unsigned long start, unsigned long end); /* 0-based, inclusive */
 
     /* Query */
     unsigned long (*length)(OrderedIndex *idx);
-    OrderedIndexItem *(*get_by_rank)(OrderedIndex *idx, unsigned long rank);
-    long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);
+    OrderedIndexItem *(*get_by_rank)(OrderedIndex *idx, unsigned long rank); /* 0-based */
+    long (*get_rank)(OrderedIndex *idx, const OrderedIndexItem *pos);        /* returns 0-based, -1 if not found */
     void (*get_element_raw)(const OrderedIndexItem *pos, const char **ptr, size_t *len);
     double (*get_score)(const OrderedIndexItem *pos);
 
@@ -36,7 +36,7 @@ typedef struct OrderedIndexOps {
     void (*reset_iterator)(OrderedIndexIterator *iter);
     bool (*next)(OrderedIndexIterator *iter, OrderedIndexItem **pos);
     bool (*prev)(OrderedIndexIterator *iter, OrderedIndexItem **pos);
-    void (*seek_to_rank)(OrderedIndexIterator *iter, unsigned long rank);
+    void (*seek_to_rank)(OrderedIndexIterator *iter, unsigned long rank); /* 0-based */
     void (*seek_to_score_range)(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
 
     /* TODO: Add interface methods for memory management:

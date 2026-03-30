@@ -54,7 +54,8 @@ static unsigned long skiplistDeleteRangeByScore(OrderedIndex *idx, double min, d
 }
 
 static unsigned long skiplistDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    return zslDeleteRangeByRank((zskiplist *)idx, start, end, NULL);
+    /* Interface is 0-based inclusive, skiplist is 1-based inclusive */
+    return zslDeleteRangeByRank((zskiplist *)idx, start + 1, end + 1, NULL);
 }
 
 /* Query */
@@ -64,11 +65,14 @@ static unsigned long skiplistLength(OrderedIndex *idx) {
 }
 
 static OrderedIndexItem *skiplistGetByRank(OrderedIndex *idx, unsigned long rank) {
-    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)idx, rank);
+    /* Interface is 0-based, skiplist is 1-based */
+    return (OrderedIndexItem *)zslGetElementByRank((zskiplist *)idx, rank + 1);
 }
 
 static long skiplistGetRank(OrderedIndex *idx, const OrderedIndexItem *node) {
-    return (long)zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
+    /* skiplist returns 1-based, interface is 0-based */
+    long rank = (long)zslGetRank((zskiplist *)idx, (const zskiplistNode *)node);
+    return rank > 0 ? rank - 1 : -1;
 }
 
 static void skiplistGetElementRaw(const OrderedIndexItem *node, const char **ptr, size_t *len) {
@@ -101,6 +105,8 @@ static bool skiplistPrev(OrderedIndexIterator *iter, OrderedIndexItem **pos) {
 }
 
 static void skiplistSeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
+    /* Interface is 0-based. zslSeekToRank positions so next() returns rank+1 (1-based),
+     * which equals rank (0-based). So pass through directly. */
     zslSeekToRank((zskiplistIterator *)iter, rank);
 }
 
