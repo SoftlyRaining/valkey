@@ -3341,3 +3341,58 @@ TEST_F(FbtreeTest, DeleteRangeByValueAdjacentExclusive) {
     EXPECT_EQ(remaining[1], std::string("bbb\0", 4));
     EXPECT_EQ(remaining[2], std::string("ccc\0", 4));
 }
+
+
+TEST_F(FbtreeTest, DeleteRangeByRankSweep) {
+    /* Sweep many start/end combinations on a multilevel tree to exercise
+     * every possible split point in the optimized range deletion. */
+    const int N = TEST_NODE_CAPACITY * 4;
+    unsigned long step = TEST_NODE_CAPACITY / 2;
+
+    /* Build reference set once */
+    std::vector<std::string> all_elements;
+    for (int i = 0; i < N; i++) {
+        sds s = createBase26TestString("k_", "", i, 5);
+        all_elements.emplace_back(s, sdslen(s));
+        sdsfree(s);
+    }
+
+    for (unsigned long start = 0; start < (unsigned long)N; start += step) {
+        for (unsigned long end = start; end < (unsigned long)N; end += step) {
+            fbtreeIndex *tree = fbtreeCreate();
+            for (int i = 0; i < N; i++) {
+                fbtreeInsert(tree, createBase26TestString("k_", "", i, 5));
+            }
+
+            unsigned long clamped_end = end >= (unsigned long)N ? (unsigned long)(N - 1) : end;
+            unsigned long expected = clamped_end - start + 1;
+
+            unsigned long deleted = fbtreeDeleteRangeByRank(tree, start, end);
+            unsigned long remaining = fbtreeLength(tree);
+
+            EXPECT_EQ(deleted, expected)
+                << "start=" << start << " end=" << end;
+            EXPECT_EQ(remaining, (unsigned long)N - deleted)
+                << "start=" << start << " end=" << end;
+            EXPECT_TRUE(fbtreeDebugValidate(tree, false))
+                << "Validation failed: start=" << start << " end=" << end;
+
+            /* Verify surviving elements match expected */
+            fbtreeIterator it;
+            fbtreeInitIterator(&it, tree);
+            const_sds pos;
+            size_t idx = 0;
+            while (fbtreeNext(&it, &pos)) {
+                /* Find the next expected surviving element */
+                while (idx >= start && idx <= clamped_end) idx++;
+                ASSERT_LT(idx, (size_t)N)
+                    << "Too many elements after delete: start=" << start << " end=" << end;
+                EXPECT_EQ(std::string(pos, sdslen(pos)), all_elements[idx])
+                    << "Wrong element at position: start=" << start << " end=" << end << " idx=" << idx;
+                idx++;
+            }
+
+            fbtreeFree(tree);
+        }
+    }
+}
