@@ -26,7 +26,7 @@ extern "C" {
 #define TEST_THREE_LEVEL_ITEMS (TEST_TWO_LEVEL_ITEMS + 200)
 
 /* Size limit of embedded prefix - must match EMBED_PREFIX_LEN in fbtree_ordered_index.c */
-#define TEST_EMBED_PREFIX_LEN 54
+#define TEST_EMBED_PREFIX_LEN 62
 
 /* ========== Test Helpers ========== */
 
@@ -129,7 +129,7 @@ TEST_F(FbtreeTest, CreateAndFree) {
  * innerNode should fit in 1792-byte class, leafNode in 512-byte class.
  * This catches accidental struct bloat that wastes memory. */
 TEST_F(FbtreeTest, NodeAllocationSizes) {
-    void *inner_test = zmalloc(1784); /* sizeof(innerNode) */
+    void *inner_test = zmalloc(1792); /* sizeof(innerNode) */
     void *leaf_test = zmalloc(512);   /* sizeof(leafNode) */
 
     EXPECT_EQ(zmalloc_usable_size(inner_test), 1792u);

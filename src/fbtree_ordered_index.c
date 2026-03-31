@@ -30,7 +30,7 @@
 #define NODE_SIZE 61
 
 #if SIZE_MAX == UINT64_MAX   /* 64-bit */
-#define EMBED_PREFIX_LEN 54  /* Tuned to fit innerNode in 1792-byte jemalloc size class */
+#define EMBED_PREFIX_LEN 62  /* Tuned so innerNode exactly matches 1792-byte jemalloc size class */
 #elif SIZE_MAX == UINT32_MAX /* 32-bit */
 #define EMBED_PREFIX_LEN 30  /* Tuned to fit innerNode exactly in 1024-byte jemalloc size class */
 #endif
@@ -64,7 +64,7 @@ typedef struct leafNode {
 
 /* Architecture-specific size assertions */
 #if SIZE_MAX == UINT64_MAX /* 64-bit */
-static_assert(sizeof(innerNode) == 1784, "64-bit innerNode should fit in 1792-byte jemalloc size class");
+static_assert(sizeof(innerNode) == 1792, "64-bit innerNode should exactly match 1792-byte jemalloc size class");
 static_assert(sizeof(leafNode) == 512, "64-bit leafNode should fit perfectly in jemalloc size class");
 #elif SIZE_MAX == UINT32_MAX /* 32-bit */
 static_assert(sizeof(innerNode) == 1024, "32-bit innerNode should fit exactly in 1024-byte jemalloc size class");
