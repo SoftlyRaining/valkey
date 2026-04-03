@@ -49,5 +49,6 @@ unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt, const_sds min_val, cons
 
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
+bool fbtreeDebugValidateMergeEnforcement(fbtreeIndex *fbt);
 
 #endif /* FBTREE_ORDERED_INDEX_H */

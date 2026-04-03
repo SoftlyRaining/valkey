@@ -26,7 +26,7 @@ extern "C" {
 #define TEST_THREE_LEVEL_ITEMS (TEST_TWO_LEVEL_ITEMS + 200)
 
 /* Size limit of embedded prefix - must match EMBED_PREFIX_LEN in fbtree_ordered_index.c */
-#define TEST_EMBED_PREFIX_LEN 62
+#define TEST_EMBED_PREFIX_LEN 254
 
 /* ========== Test Helpers ========== */
 
@@ -126,13 +126,13 @@ TEST_F(FbtreeTest, CreateAndFree) {
 }
 
 /* Verify node sizes fit expected jemalloc size classes.
- * innerNode should fit in 1792-byte class, leafNode in 512-byte class.
+ * innerNode should fit in 2048-byte class, leafNode in 512-byte class.
  * This catches accidental struct bloat that wastes memory. */
 TEST_F(FbtreeTest, NodeAllocationSizes) {
-    void *inner_test = zmalloc(1792); /* sizeof(innerNode) */
+    void *inner_test = zmalloc(2048); /* sizeof(innerNode) rounds up to 2048 */
     void *leaf_test = zmalloc(512);   /* sizeof(leafNode) */
 
-    EXPECT_EQ(zmalloc_usable_size(inner_test), 1792u);
+    EXPECT_EQ(zmalloc_usable_size(inner_test), 2048u);
     EXPECT_EQ(zmalloc_usable_size(leaf_test), 512u);
 
     zfree(inner_test);
@@ -3394,5 +3394,653 @@ TEST_F(FbtreeTest, DeleteRangeByRankSweep) {
 
             fbtreeFree(tree);
         }
+    }
+}
+
+/* ========== Node Merge Unit Tests ========== */
+
+/* MIN_FILL = NODE_SIZE / 4 = 15 */
+#define TEST_MIN_FILL (TEST_NODE_CAPACITY / 4)
+
+/* Insert enough items to create 2 leaves, then delete from one leaf until
+ * underflow triggers a merge back to a single leaf. */
+TEST_F(FbtreeTest, NodeMergeLeafBasic) {
+    /* Insert NODE_SIZE+1 items sequentially. With append pattern, the split
+     * creates a full left leaf (NODE_SIZE items) and a right leaf with 1 item. */
+    const int count = TEST_NODE_CAPACITY + 1;
+    char buf[16];
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "item_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
+
+    /* Delete items from the beginning of the tree. This removes items from the
+     * left (larger) leaf. After enough deletes, the left leaf drops below
+     * MIN_FILL and should merge with the right leaf (which has few items). */
+    int to_delete = count - TEST_MIN_FILL + 1; /* leave fewer than MIN_FILL in left leaf */
+    for (int i = 0; i < to_delete; i++) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    int remaining = count - to_delete;
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)remaining);
+    expectValid();
+
+    /* Verify all remaining items are accessible via iteration */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    int iter_count = 0;
+    while (fbtreeNext(&it, &pos)) iter_count++;
+    EXPECT_EQ(iter_count, remaining);
+
+    zfree(inserted);
+}
+
+/* Build a 3-level tree, delete enough items to cause inner node underflow
+ * and merge. */
+TEST_F(FbtreeTest, NodeMergeInner) {
+    /* Build a 3-level tree */
+    const int count = TEST_THREE_LEVEL_ITEMS;
+    char buf[16];
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
+
+    /* Delete a large portion of items from the beginning. This will cause
+     * multiple leaf merges, which in turn remove children from inner nodes,
+     * eventually causing inner node underflow and merge. */
+    int to_delete = count * 3 / 4;
+    for (int i = 0; i < to_delete; i++) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    int remaining = count - to_delete;
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)remaining);
+    expectValid();
+
+    /* Verify iteration produces correct sorted order */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    for (int i = to_delete; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
+    }
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+
+    zfree(inserted);
+}
+
+/* Build a tree where deletes trigger merges at multiple levels as the
+ * recursion unwinds. */
+TEST_F(FbtreeTest, NodeMergeCascading) {
+    /* Build a 3-level tree */
+    const int count = TEST_THREE_LEVEL_ITEMS;
+    char buf[16];
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "cas_%05d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Delete most items, leaving very few. This forces cascading merges:
+     * leaf merges → inner node child removal → inner node underflow → inner merge.
+     * Delete all but ~20 items spread across the range. */
+    for (int i = 0; i < count; i++) {
+        /* Keep every (count/20)th item */
+        if (i % (count / 20) == 0) continue;
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    expectValid();
+
+    /* Verify remaining items are correct */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    const_sds prev_pos = nullptr;
+    int iter_count = 0;
+    while (fbtreeNext(&it, &pos)) {
+        if (prev_pos) {
+            EXPECT_LT(sdscmp(prev_pos, pos), 0) << "Sorted order violated after cascading merge";
+        }
+        prev_pos = pos;
+        iter_count++;
+    }
+    EXPECT_EQ((size_t)iter_count, fbtreeLength(fbt));
+
+    zfree(inserted);
+}
+
+/* Build a tree where the underflowed node's sibling has NODE_SIZE items,
+ * so merge is impossible. */
+TEST_F(FbtreeTest, NodeMergeNoMergeWhenSiblingFull) {
+    /* Strategy: insert items in a pattern that creates a full leaf (NODE_SIZE items)
+     * next to a leaf that will underflow. With sequential insert and middle-split,
+     * we get two leaves of ~NODE_SIZE/2 each. Instead, we'll build a larger tree
+     * and selectively delete to create the scenario.
+     *
+     * Build a tree with 3*NODE_SIZE items (3+ leaves). Delete from the middle leaf
+     * until it underflows. If both neighbors are full (NODE_SIZE), no merge occurs. */
+    const int count = TEST_NODE_CAPACITY * 3;
+    char buf[16];
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "nfm_%04d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Delete items from the middle region to cause underflow in one leaf.
+     * The tree should still validate - if merge can't happen (sibling full),
+     * the underflowed node persists. */
+    int mid_start = TEST_NODE_CAPACITY;
+    int mid_end = mid_start + TEST_NODE_CAPACITY - TEST_MIN_FILL;
+    for (int i = mid_start; i < mid_end; i++) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    int remaining = count - (mid_end - mid_start);
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)remaining);
+    expectValid();
+
+    /* Verify all remaining items are accessible */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    int iter_count = 0;
+    while (fbtreeNext(&it, &pos)) iter_count++;
+    EXPECT_EQ(iter_count, remaining);
+
+    zfree(inserted);
+}
+
+/* Verify that after merging the leftmost or rightmost leaf, the cache
+ * pointers are correct. */
+TEST_F(FbtreeTest, NodeMergeLeafCacheUpdate) {
+    const int count = TEST_NODE_CAPACITY * 3;
+    char buf[16];
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "cache_%04d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Part 1: Delete from leftmost leaf until merge, verify leftmost_leaf cache
+     * is correct via forward iteration. */
+    for (int i = 0; i < TEST_NODE_CAPACITY; i++) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    expectValid();
+
+    /* Forward iteration should start from the correct leftmost leaf */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    snprintf(buf, sizeof(buf), "cache_%04d", TEST_NODE_CAPACITY);
+    EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0)
+        << "leftmost_leaf cache incorrect after merge";
+
+    /* Part 2: Delete from rightmost leaf until merge, verify rightmost_leaf cache
+     * is correct via backward iteration. */
+    for (int i = count - 1; i >= count - TEST_NODE_CAPACITY; i--) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    expectValid();
+
+    /* Backward iteration should start from the correct rightmost leaf */
+    fbtreeInitIterator(&it, fbt);
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    snprintf(buf, sizeof(buf), "cache_%04d", count - TEST_NODE_CAPACITY - 1);
+    EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0)
+        << "rightmost_leaf cache incorrect after merge";
+
+    zfree(inserted);
+}
+
+/* Range delete that leaves boundary nodes underflowed, verify merges
+ * happen via fbtreeDebugValidate. */
+TEST_F(FbtreeTest, NodeMergeRangeDelete) {
+    const int count = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < count; i++) {
+        fbtreeInsert(fbt, createBase26TestString("rng_", "", i, 5));
+    }
+    expectValid();
+
+    /* Delete a range from the middle that spans multiple leaves.
+     * The boundary leaves (partially deleted) may underflow and trigger merges. */
+    unsigned long start = TEST_NODE_CAPACITY + 5;
+    unsigned long end = TEST_NODE_CAPACITY * 3 - 5;
+    unsigned long expected_deleted = end - start + 1;
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, start, end), expected_deleted);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(count - expected_deleted));
+    expectValid();
+
+    /* Verify sorted iteration still works */
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), (size_t)(count - expected_deleted));
+
+    /* Verify backward iteration matches */
+    auto backward = collectBackward();
+    EXPECT_EQ(backward.size(), remaining.size());
+}
+
+/* Merge reduces root to single child, verify root collapses correctly. */
+TEST_F(FbtreeTest, NodeMergeRootCollapse) {
+    /* Insert just enough to create a 2-level tree (root inner + 2 leaves).
+     * Then delete until one leaf is empty/merged, leaving root with 1 child.
+     * Root should collapse to that single child (a leaf). */
+    const int count = TEST_NODE_CAPACITY + 1;
+    char buf[16];
+    sds *inserted = (sds *)zmalloc(count * sizeof(sds));
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "root_%03d", i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Delete all but a handful of items. After merges, the root should collapse
+     * from an inner node to a leaf node. */
+    int keep = 5;
+    for (int i = 0; i < count - keep; i++) {
+        EXPECT_TRUE(fbtreeDelete(fbt, inserted[i]));
+    }
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)keep);
+    expectValid();
+
+    /* Verify the remaining items are correct */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    for (int i = count - keep; i < count; i++) {
+        snprintf(buf, sizeof(buf), "root_%03d", i);
+        ASSERT_TRUE(fbtreeNext(&it, &pos));
+        EXPECT_EQ(memcmp(pos, buf, strlen(buf) + 1), 0);
+    }
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+
+    zfree(inserted);
+}
+
+/* Pop operations that trigger leaf merges, verify tree invariants. */
+TEST_F(FbtreeTest, NodeMergePopMinMax) {
+    const int count = TEST_NODE_CAPACITY * 3;
+    char buf[16];
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "pop_%04d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Pop min repeatedly - this removes from the leftmost leaf, eventually
+     * causing underflow and merge. */
+    for (int i = 0; i < TEST_NODE_CAPACITY + TEST_MIN_FILL; i++) {
+        sds popped = fbtreePopMin(fbt);
+        ASSERT_NE(popped, nullptr);
+        snprintf(buf, sizeof(buf), "pop_%04d", i);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
+        sdsfree(popped);
+    }
+    expectValid();
+
+    /* Pop max repeatedly - this removes from the rightmost leaf, eventually
+     * causing underflow and merge. */
+    for (int i = count - 1; i >= count - TEST_NODE_CAPACITY - TEST_MIN_FILL; i--) {
+        sds popped = fbtreePopMax(fbt);
+        ASSERT_NE(popped, nullptr);
+        snprintf(buf, sizeof(buf), "pop_%04d", i);
+        EXPECT_EQ(memcmp(popped, buf, strlen(buf) + 1), 0);
+        sdsfree(popped);
+    }
+    expectValid();
+
+    /* Verify remaining items via iteration */
+    int expected_remaining = count - 2 * (TEST_NODE_CAPACITY + TEST_MIN_FILL);
+    EXPECT_EQ(fbtreeLength(fbt), (size_t)expected_remaining);
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    int iter_count = 0;
+    const_sds prev_pos = nullptr;
+    while (fbtreeNext(&it, &pos)) {
+        if (prev_pos) {
+            EXPECT_LT(sdscmp(prev_pos, pos), 0) << "Sorted order violated after pop merges";
+        }
+        prev_pos = pos;
+        iter_count++;
+    }
+    EXPECT_EQ(iter_count, expected_remaining);
+}
+
+/* ========== Property-Based Tests for Node Merging ========== */
+
+/* Helper: generate a unique key using a monotonic counter for deterministic uniqueness. */
+static sds generateUniqueKey(const char *prefix, int counter, unsigned int *seed) {
+    char buf[32];
+    (void)seed; /* seed available for future use */
+    snprintf(buf, sizeof(buf), "%s%08d", prefix, counter);
+    return createString(buf);
+}
+
+/* child_num_items consistency: for any FBTree built by any sequence of inserts
+ * and deletes, and for any inner node in that tree,
+ * child_num_items[i] == children[i]->num_items. */
+TEST_F(FbtreeTest, PropertyChildNumItemsConsistency) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 100;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *tree = fbtreeCreate();
+
+        /* Vary tree size: single-leaf, 2-level, 3-level */
+        int target_size;
+        if (iter < 50) {
+            target_size = 1 + (rand_r(&seed) % TEST_NODE_CAPACITY);
+        } else if (iter < 100) {
+            target_size = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            target_size = 400 + (rand_r(&seed) % 1600);
+        }
+
+        /* Insert phase */
+        for (int i = 0; i < target_size; i++) {
+            sds s = generateUniqueKey("c1_", key_counter++, &seed);
+            fbtreeInsert(tree, s);
+        }
+
+        /* Delete phase: delete a random subset using rank-based lookup */
+        int num_deletes = (int)(rand_r(&seed) % (target_size + 1));
+        for (int d = 0; d < num_deletes && fbtreeLength(tree) > 0; d++) {
+            unsigned long len = fbtreeLength(tree);
+            unsigned long rank = rand_r(&seed) % len;
+            const_sds item = fbtreeGetAtRank(tree, rank);
+            ASSERT_NE(item, nullptr);
+            fbtreeDelete(tree, item);
+        }
+
+        /* Validate child_num_items consistency after all operations */
+        if (fbtreeLength(tree) > 0) {
+            ASSERT_TRUE(fbtreeDebugValidate(tree, false))
+                << "Validation failed after deletes, iter=" << iter;
+        }
+
+        fbtreeFree(tree);
+    }
+}
+
+/* Sorted order preserved after merges: for any FBTree and any sequence of
+ * insert and delete operations, iterating forward produces non-decreasing
+ * order, backward produces non-increasing order. */
+TEST_F(FbtreeTest, PropertySortedOrderAfterMerges) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 200;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *tree = fbtreeCreate();
+
+        /* Vary tree size to trigger merges */
+        int target_size;
+        if (iter < 50) {
+            target_size = 10 + (rand_r(&seed) % 60);
+        } else if (iter < 100) {
+            target_size = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            target_size = 400 + (rand_r(&seed) % 4600);
+        }
+
+        /* Insert phase */
+        for (int i = 0; i < target_size; i++) {
+            sds s = generateUniqueKey("c2_", key_counter++, &seed);
+            fbtreeInsert(tree, s);
+        }
+
+        /* Delete enough to trigger merges using rank-based lookup */
+        int num_deletes = target_size / 2 + (rand_r(&seed) % (target_size / 2 + 1));
+        for (int d = 0; d < num_deletes && fbtreeLength(tree) > 0; d++) {
+            unsigned long len = fbtreeLength(tree);
+            unsigned long rank = rand_r(&seed) % len;
+            const_sds item = fbtreeGetAtRank(tree, rank);
+            if (item) fbtreeDelete(tree, item);
+        }
+
+        /* Verify forward iteration is non-decreasing */
+        {
+            fbtreeIterator it;
+            fbtreeInitIterator(&it, tree);
+            const_sds pos;
+            const_sds prev = nullptr;
+            int count = 0;
+            while (fbtreeNext(&it, &pos)) {
+                if (prev) {
+                    ASSERT_LE(sdscmp(prev, pos), 0)
+                        << "Forward order violated at iter=" << iter << " count=" << count;
+                }
+                prev = pos;
+                count++;
+            }
+            ASSERT_EQ((size_t)count, fbtreeLength(tree))
+                << "Forward count mismatch at iter=" << iter;
+        }
+
+        /* Verify backward iteration is non-increasing */
+        {
+            fbtreeIterator it;
+            fbtreeInitIterator(&it, tree);
+            const_sds pos;
+            const_sds prev = nullptr;
+            int count = 0;
+            while (fbtreePrev(&it, &pos)) {
+                if (prev) {
+                    ASSERT_GE(sdscmp(prev, pos), 0)
+                        << "Backward order violated at iter=" << iter << " count=" << count;
+                }
+                prev = pos;
+                count++;
+            }
+            ASSERT_EQ((size_t)count, fbtreeLength(tree))
+                << "Backward count mismatch at iter=" << iter;
+        }
+
+        fbtreeFree(tree);
+    }
+}
+
+/* Tree invariants hold after any operation: for any FBTree and any sequence
+ * of operations (single delete, pop min/max, range delete),
+ * fbtreeDebugValidate returns true. */
+TEST_F(FbtreeTest, PropertyTreeInvariantsAfterAnyOperation) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 300;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *tree = fbtreeCreate();
+
+        /* Vary tree size */
+        int target_size;
+        if (iter < 50) {
+            target_size = 5 + (rand_r(&seed) % 60);
+        } else if (iter < 100) {
+            target_size = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            target_size = 400 + (rand_r(&seed) % 1600);
+        }
+
+        /* Insert phase */
+        for (int i = 0; i < target_size; i++) {
+            sds s = generateUniqueKey("c3_", key_counter++, &seed);
+            fbtreeInsert(tree, s);
+        }
+        ASSERT_TRUE(fbtreeDebugValidate(tree, false))
+            << "Validation failed after inserts, iter=" << iter;
+
+        /* Mixed operation phase: use rank-based operations to avoid pointer tracking */
+        int num_ops = target_size / 2 + (rand_r(&seed) % (target_size / 2 + 1));
+        for (int op = 0; op < num_ops && fbtreeLength(tree) > 0; op++) {
+            int op_type = rand_r(&seed) % 4;
+            unsigned long len = fbtreeLength(tree);
+
+            if (op_type == 0 && len > 0) {
+                /* Delete by rank: get item at random rank, then delete it */
+                unsigned long rank = rand_r(&seed) % len;
+                const_sds item = fbtreeGetAtRank(tree, rank);
+                if (item) fbtreeDelete(tree, item);
+            } else if (op_type == 1 && len > 0) {
+                /* Pop min */
+                sds popped = fbtreePopMin(tree);
+                if (popped) sdsfree(popped);
+            } else if (op_type == 2 && len > 0) {
+                /* Pop max */
+                sds popped = fbtreePopMax(tree);
+                if (popped) sdsfree(popped);
+            } else if (len >= 2) {
+                /* Range delete by rank */
+                unsigned long start = rand_r(&seed) % len;
+                unsigned long end = start + (rand_r(&seed) % (len - start));
+                if (end >= len) end = len - 1;
+                fbtreeDeleteRangeByRank(tree, start, end);
+            }
+
+            ASSERT_TRUE(fbtreeDebugValidate(tree, false))
+                << "Validation failed after op " << op << " type=" << op_type
+                << " iter=" << iter;
+        }
+
+        fbtreeFree(tree);
+    }
+}
+
+/* Insert-then-delete-all round trip: for any set of N randomly generated
+ * strings, inserting all N then deleting all N results in an empty tree
+ * with zero memory leaks. */
+TEST_F(FbtreeTest, PropertyInsertDeleteAllRoundTrip) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 400;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        size_t mem_before_iter = zmalloc_used_memory();
+
+        int n;
+        if (iter < 50) {
+            n = 1 + (rand_r(&seed) % 60);
+        } else if (iter < 100) {
+            n = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            n = 400 + (rand_r(&seed) % 4600);
+        }
+
+        /* Choose deletion strategy: 0=random delete, 1=pop-min, 2=pop-max */
+        int strategy = iter % 3;
+
+        fbtreeIndex *tree = fbtreeCreate();
+        std::vector<sds> inserted_items;
+
+        for (int i = 0; i < n; i++) {
+            sds s = generateUniqueKey("c4_", key_counter++, &seed);
+            sds ins = fbtreeInsert(tree, s);
+            inserted_items.push_back(ins);
+        }
+
+        if (strategy == 0) {
+            /* Delete all in random order by pointer */
+            while (!inserted_items.empty()) {
+                int idx = rand_r(&seed) % inserted_items.size();
+                ASSERT_TRUE(fbtreeDelete(tree, inserted_items[idx]))
+                    << "Delete failed at iter=" << iter;
+                inserted_items.erase(inserted_items.begin() + idx);
+            }
+        } else if (strategy == 1) {
+            /* Pop min all */
+            inserted_items.clear();
+            while (fbtreeLength(tree) > 0) {
+                sds popped = fbtreePopMin(tree);
+                ASSERT_NE(popped, nullptr) << "PopMin returned null, iter=" << iter;
+                sdsfree(popped);
+            }
+        } else {
+            /* Pop max all */
+            inserted_items.clear();
+            while (fbtreeLength(tree) > 0) {
+                sds popped = fbtreePopMax(tree);
+                ASSERT_NE(popped, nullptr) << "PopMax returned null, iter=" << iter;
+                sdsfree(popped);
+            }
+        }
+
+        ASSERT_EQ(fbtreeLength(tree), 0u) << "Tree not empty after delete-all, iter=" << iter;
+        fbtreeFree(tree);
+        ASSERT_EQ(zmalloc_used_memory(), mem_before_iter)
+            << "Memory leak detected at iter=" << iter << " strategy=" << strategy;
+    }
+}
+
+/* Merge enforcement — no unnecessarily sparse nodes: for any FBTree after any
+ * sequence of inserts and deletes, no non-root node has num_items < MIN_FILL
+ * unless all siblings have num_items + node.num_items > NODE_SIZE. */
+TEST_F(FbtreeTest, PropertyMergeEnforcement) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 500;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        fbtreeIndex *tree = fbtreeCreate();
+
+        /* Vary tree size */
+        int target_size;
+        if (iter < 50) {
+            target_size = 10 + (rand_r(&seed) % 60);
+        } else if (iter < 100) {
+            target_size = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            target_size = 400 + (rand_r(&seed) % 4600);
+        }
+
+        /* Insert phase */
+        for (int i = 0; i < target_size; i++) {
+            sds s = generateUniqueKey("c5_", key_counter++, &seed);
+            fbtreeInsert(tree, s);
+        }
+
+        /* Delete phase: delete a random subset to trigger merges using rank-based lookup */
+        int num_deletes = target_size / 2 + (rand_r(&seed) % (target_size / 2 + 1));
+        for (int d = 0; d < num_deletes && fbtreeLength(tree) > 0; d++) {
+            unsigned long len = fbtreeLength(tree);
+            unsigned long rank = rand_r(&seed) % len;
+            const_sds item = fbtreeGetAtRank(tree, rank);
+            if (item) fbtreeDelete(tree, item);
+        }
+
+        ASSERT_TRUE(fbtreeDebugValidateMergeEnforcement(tree))
+            << "Merge enforcement violated at iter=" << iter
+            << " (sparse node exists with a sibling that has room)";
+
+        fbtreeFree(tree);
     }
 }

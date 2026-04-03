@@ -30,7 +30,7 @@
 #define NODE_SIZE 61
 
 #if SIZE_MAX == UINT64_MAX   /* 64-bit */
-#define EMBED_PREFIX_LEN 62  /* Tuned so innerNode exactly matches 1792-byte jemalloc size class */
+#define EMBED_PREFIX_LEN 254 /* Tuned so innerNode fits in 2048-byte jemalloc size class */
 #elif SIZE_MAX == UINT32_MAX /* 32-bit */
 #define EMBED_PREFIX_LEN 30  /* Tuned to fit innerNode exactly in 1024-byte jemalloc size class */
 #endif
@@ -52,7 +52,8 @@ typedef struct {
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
     sds anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
     node *children[NODE_SIZE];
-    size_t child_sizes[NODE_SIZE]; /* subtree element counts for rank queries */
+    size_t child_sizes[NODE_SIZE];      /* subtree element counts for rank queries */
+    uint8_t child_num_items[NODE_SIZE]; /* direct item count of each child */
 } innerNode;
 
 typedef struct leafNode {
@@ -64,7 +65,7 @@ typedef struct leafNode {
 
 /* Architecture-specific size assertions */
 #if SIZE_MAX == UINT64_MAX /* 64-bit */
-static_assert(sizeof(innerNode) == 1792, "64-bit innerNode should exactly match 1792-byte jemalloc size class");
+static_assert(sizeof(innerNode) == 2048, "64-bit innerNode should fit in 2048-byte jemalloc size class");
 static_assert(sizeof(leafNode) == 512, "64-bit leafNode should fit perfectly in jemalloc size class");
 #elif SIZE_MAX == UINT32_MAX /* 32-bit */
 static_assert(sizeof(innerNode) == 1024, "32-bit innerNode should fit exactly in 1024-byte jemalloc size class");
@@ -121,7 +122,7 @@ typedef enum {
 typedef struct {
     sds updated_anchor;    /* Pointer to updated anchor string if it's changed */
     bool delete_executed;  /* True if key was found and deleted, False if not found no-op */
-    bool node_underflowed; /* TODO: Currently unused. Implement node merging for memory efficiency if needed. */
+    bool node_underflowed; /* True if child dropped below MIN_FILL after delete */
 } deleteResult;
 
 /* Conversion from user-facing opaque iterator type to internal struct */
@@ -176,6 +177,7 @@ static innerNode *innerNodeCreate(void) {
     memset(node->anchors, 0, sizeof(node->anchors));
     memset(node->children, 0, sizeof(node->children));
     memset(node->child_sizes, 0, sizeof(node->child_sizes));
+    memset(node->child_num_items, 0, sizeof(node->child_num_items));
     return node;
 }
 
@@ -250,8 +252,31 @@ static void recomputeFeatures(innerNode *inner) {
     }
 }
 
-static void updateCommonPrefix(innerNode *inner) {
-    if (inner->header.num_items < 2) return; // TODO: update for key deletion
+/* Copy count children (anchors, child pointers, child_sizes, child_num_items,
+ * features) from src starting at src_idx to dst starting at dst_idx.
+ * Regions must not overlap — use innerNodeMoveChildren for overlapping shifts. */
+static inline void innerNodeCopyChildren(innerNode *dst, int dst_idx, innerNode *src, int src_idx, int count) {
+    for (int j = 0; j < FEATURE_SIZE; j++)
+        memcpy(&dst->features[j][dst_idx], &src->features[j][src_idx], count);
+    memcpy(&dst->anchors[dst_idx], &src->anchors[src_idx], count * sizeof(dst->anchors[0]));
+    memcpy(&dst->children[dst_idx], &src->children[src_idx], count * sizeof(dst->children[0]));
+    memcpy(&dst->child_sizes[dst_idx], &src->child_sizes[src_idx], count * sizeof(dst->child_sizes[0]));
+    memcpy(&dst->child_num_items[dst_idx], &src->child_num_items[src_idx], count * sizeof(dst->child_num_items[0]));
+}
+
+/* Move count children within the same node from src_idx to dst_idx.
+ * Handles overlapping regions (for insert/remove shifts). */
+static inline void innerNodeMoveChildren(innerNode *node, int dst_idx, int src_idx, int count) {
+    for (int j = 0; j < FEATURE_SIZE; j++)
+        memmove(&node->features[j][dst_idx], &node->features[j][src_idx], count);
+    memmove(&node->anchors[dst_idx], &node->anchors[src_idx], count * sizeof(node->anchors[0]));
+    memmove(&node->children[dst_idx], &node->children[src_idx], count * sizeof(node->children[0]));
+    memmove(&node->child_sizes[dst_idx], &node->child_sizes[src_idx], count * sizeof(node->child_sizes[0]));
+    memmove(&node->child_num_items[dst_idx], &node->child_num_items[src_idx], count * sizeof(node->child_num_items[0]));
+}
+
+static bool updateCommonPrefix(innerNode *inner) {
+    if (inner->header.num_items < 2) return false;
     // TODO: if we knew which one updated, we could optimize to avoid one of the anchor key fetches (probably)
 
     const_sds first_anchor = inner->anchors[0];
@@ -267,7 +292,9 @@ static void updateCommonPrefix(innerNode *inner) {
     if (prefix_changed) {
         innerNodeSetPrefix(inner, first_anchor, len);
         recomputeFeatures(inner);
+        return true;
     }
+    return false;
 }
 
 /* Get size of a node's subtree */
@@ -291,11 +318,7 @@ static bool innerNodeInsert(innerNode *parent, const node *child, sds child_anch
     /* shift higher elements to make space */
     size_t num_to_move = parent->header.num_items - insert_index;
     if (num_to_move > 0) {
-        for (int j = 0; j < FEATURE_SIZE; j++)
-            memmove(&parent->features[j][insert_index + 1], &parent->features[j][insert_index], num_to_move);
-        memmove(&parent->anchors[insert_index + 1], &parent->anchors[insert_index], num_to_move * sizeof(parent->anchors[0]));
-        memmove(&parent->children[insert_index + 1], &parent->children[insert_index], num_to_move * sizeof(parent->children[0]));
-        memmove(&parent->child_sizes[insert_index + 1], &parent->child_sizes[insert_index], num_to_move * sizeof(parent->child_sizes[0]));
+        innerNodeMoveChildren(parent, insert_index + 1, insert_index, num_to_move);
     }
 
     /* insert child - features stored pre-biased for SIMD comparison */
@@ -304,6 +327,7 @@ static bool innerNodeInsert(innerNode *parent, const node *child, sds child_anch
     parent->anchors[insert_index] = child_anchor;
     parent->children[insert_index] = (node *)child;
     parent->child_sizes[insert_index] = getSubtreeSize((node *)child);
+    parent->child_num_items[insert_index] = ((node *)child)->num_items;
     parent->header.num_items++;
 
     /* update prefix - might need to initialize, or common length could become shorter */
@@ -320,11 +344,7 @@ static void innerNodeRemoveChild(innerNode *parent, int index) {
     assert(index < parent->header.num_items);
     int num_to_move = parent->header.num_items - index - 1;
     if (num_to_move > 0) {
-        for (int j = 0; j < FEATURE_SIZE; j++)
-            memmove(&parent->features[j][index], &parent->features[j][index + 1], num_to_move);
-        memmove(&parent->anchors[index], &parent->anchors[index + 1], num_to_move * sizeof(parent->anchors[0]));
-        memmove(&parent->children[index], &parent->children[index + 1], num_to_move * sizeof(parent->children[0]));
-        memmove(&parent->child_sizes[index], &parent->child_sizes[index + 1], num_to_move * sizeof(parent->child_sizes[0]));
+        innerNodeMoveChildren(parent, index, index + 1, num_to_move);
     }
     parent->header.num_items--;
     if (index == 0 || index == parent->header.num_items) {
@@ -340,11 +360,7 @@ static void innerNodeRemoveChildrenRange(innerNode *parent, int start_idx, int e
     int remove_count = end_idx - start_idx + 1;
     int num_to_move = parent->header.num_items - end_idx - 1;
     if (num_to_move > 0) {
-        for (int j = 0; j < FEATURE_SIZE; j++)
-            memmove(&parent->features[j][start_idx], &parent->features[j][end_idx + 1], num_to_move);
-        memmove(&parent->anchors[start_idx], &parent->anchors[end_idx + 1], num_to_move * sizeof(parent->anchors[0]));
-        memmove(&parent->children[start_idx], &parent->children[end_idx + 1], num_to_move * sizeof(parent->children[0]));
-        memmove(&parent->child_sizes[start_idx], &parent->child_sizes[end_idx + 1], num_to_move * sizeof(parent->child_sizes[0]));
+        innerNodeMoveChildren(parent, start_idx, end_idx + 1, num_to_move);
     }
     parent->header.num_items -= remove_count;
 }
@@ -357,11 +373,7 @@ static innerNode *innerNodeSplit(innerNode *left_node) {
     const size_t num_left_keys = NODE_SIZE / 2;
     const size_t num_right_keys = NODE_SIZE - num_left_keys;
 
-    for (int j = 0; j < FEATURE_SIZE; j++)
-        memcpy(right_node->features[j], left_node->features[j] + num_left_keys, num_right_keys);
-    memcpy(right_node->anchors, left_node->anchors + num_left_keys, num_right_keys * sizeof(left_node->anchors[0]));
-    memcpy(right_node->children, left_node->children + num_left_keys, num_right_keys * sizeof(left_node->children[0]));
-    memcpy(right_node->child_sizes, left_node->child_sizes + num_left_keys, num_right_keys * sizeof(left_node->child_sizes[0]));
+    innerNodeCopyChildren(right_node, 0, left_node, num_left_keys, num_right_keys);
 
     right_node->header.num_items = num_right_keys;
     left_node->header.num_items = num_left_keys;
@@ -826,6 +838,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint, size_
         if (child_insert_result.new_node) {
             /* Our child split - recalculate original child's size since it lost elements */
             parent->child_sizes[child_idx] = getSubtreeSize(parent->children[child_idx]);
+            parent->child_num_items[child_idx] = parent->children[child_idx]->num_items;
             /* Our child split, and we need to insert the new child just after the existing one */
             insertResult result = innerNodeHandleChildSplit(parent, child_insert_result.new_node, child_insert_result.new_node_anchor, child_idx + 1);
             result.inserted_item = child_insert_result.inserted_item;
@@ -833,6 +846,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint, size_
         } else {
             /* No split - just increment size for the inserted element */
             parent->child_sizes[child_idx]++;
+            parent->child_num_items[child_idx] = parent->children[child_idx]->num_items;
             /* subtree root did not split, so no new child node to deal with */
             bool parent_anchor_changed = (child_idx == parent->header.num_items - 1);
             insertResult result = {
@@ -918,6 +932,111 @@ static int leafNodeRemoveRange(leafNode *leaf, int start_idx, int end_idx) {
     return remove_count;
 }
 
+/* Merge right leaf into left leaf by appending right's items after left's.
+ * Preserves sorted order since left < right in the tree. Right becomes empty.
+ * Caller must ensure combined count fits: left->num_items + right->num_items <= NODE_SIZE. */
+static void leafNodeMerge(leafNode *left, leafNode *right) {
+    assert(left->header.num_items + right->header.num_items <= NODE_SIZE);
+    memcpy(&left->values[left->header.num_items], right->values, right->header.num_items * sizeof(sds));
+    left->header.num_items += right->header.num_items;
+    right->header.num_items = 0;
+}
+
+/* Merge right inner node into left inner node by appending right's children
+ * after left's. Preserves tree order since left < right. Right becomes empty.
+ * Caller must ensure combined count fits: left->num_items + right->num_items <= NODE_SIZE. */
+static void innerNodeMerge(innerNode *left, innerNode *right) {
+    assert(left->header.num_items + right->header.num_items <= NODE_SIZE);
+    bool same_prefix_len = (left->prefix_len == right->prefix_len);
+    innerNodeCopyChildren(left, left->header.num_items, right, 0, right->header.num_items);
+    left->header.num_items += right->header.num_items;
+    right->header.num_items = 0;
+    /* Features depend on prefix_len (the offset into anchor strings), not the
+     * prefix bytes themselves. If both nodes had the same prefix_len, the copied
+     * features are already correct and we only need updateCommonPrefix to check
+     * whether the merged range shortened the prefix (which recomputes features
+     * internally if so). If prefix_len differed, the copied features used the
+     * wrong offset, so we must recompute if updateCommonPrefix didn't already. */
+    if (!updateCommonPrefix(left) && !same_prefix_len) {
+        recomputeFeatures(left);
+    }
+}
+
+/* Attempt to merge the child at child_idx with a sibling in the parent.
+ * Called when the child has underflowed (num_items < MIN_FILL).
+ * Always merges right into left. Returns true if a merge occurred. */
+static bool tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
+    int child_count = parent->child_num_items[child_idx];
+    if (child_count >= MIN_FILL) return false;
+
+    /* Pick the best sibling: prefer fewer items, check left then right */
+    int best_sib = -1;
+    if (child_idx > 0 && parent->child_num_items[child_idx - 1] + child_count <= NODE_SIZE) {
+        best_sib = child_idx - 1;
+    }
+    if (child_idx < parent->header.num_items - 1 &&
+        parent->child_num_items[child_idx + 1] + child_count <= NODE_SIZE) {
+        if (best_sib < 0 || parent->child_num_items[child_idx + 1] < parent->child_num_items[best_sib]) {
+            best_sib = child_idx + 1;
+        }
+    }
+    if (best_sib < 0) return false;
+
+    /* Always merge right into left */
+    int left_idx = (best_sib < child_idx) ? best_sib : child_idx;
+    int right_idx = (best_sib < child_idx) ? child_idx : best_sib;
+
+    node *left_child = parent->children[left_idx];
+    node *right_child = parent->children[right_idx];
+
+    if (left_child->is_leaf) {
+        leafNode *left_leaf = (leafNode *)left_child;
+        leafNode *right_leaf = (leafNode *)right_child;
+        leafNodeMerge(left_leaf, right_leaf);
+
+        /* Update leaf linked list */
+        left_leaf->next = right_leaf->next;
+        if (right_leaf->next) right_leaf->next->prev = left_leaf;
+
+        /* Update rightmost cache if the freed (right) node was the rightmost leaf.
+         * The left leaf can never be the leftmost_leaf being freed here since we
+         * always free the right node. */
+        if (fbt->rightmost_leaf == right_leaf) fbt->rightmost_leaf = left_leaf;
+
+        zfree(right_leaf);
+    } else {
+        innerNode *left_inner = (innerNode *)left_child;
+        innerNode *right_inner = (innerNode *)right_child;
+        innerNodeMerge(left_inner, right_inner);
+
+        innerNodeFreePrefix(right_inner);
+        zfree(right_inner);
+    }
+
+    /* Parent fixup: copy right's anchor/features to left's slot */
+    parent->anchors[left_idx] = parent->anchors[right_idx];
+    for (int j = 0; j < FEATURE_SIZE; j++)
+        parent->features[j][left_idx] = parent->features[j][right_idx];
+    parent->child_sizes[left_idx] += parent->child_sizes[right_idx];
+    parent->child_num_items[left_idx] = parent->children[left_idx]->num_items;
+
+    /* Remove the right child entry from parent */
+    innerNodeRemoveChild(parent, right_idx);
+
+    /* We changed anchors[left_idx] before removing right_idx.
+     * innerNodeRemoveChild handles prefix updates when the removed index is
+     * first or last, but if left_idx == 0 and right_idx > 0, the first anchor
+     * changed without innerNodeRemoveChild knowing. Update prefix in that case.
+     * Note: we must NOT let the prefix grow longer than children can support,
+     * so only shorten or keep the same. */
+    if (left_idx == 0 && right_idx > 0 && right_idx < parent->header.num_items) {
+        /* Only update if the first anchor changed - prefix might need shortening */
+        updateCommonPrefix(parent);
+    }
+
+    return true;
+}
+
 static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds item) {
     assert(leaf->header.num_items > 0);
 
@@ -963,6 +1082,10 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
 
     if (child_result.updated_anchor) {
         inner->anchors[index] = child_result.updated_anchor;
+        /* If the first or last anchor changed, the common prefix may need shortening */
+        if (index == 0 || index == inner->header.num_items - 1) {
+            updateCommonPrefix(inner);
+        }
         for (int j = 0; j < FEATURE_SIZE; j++)
             inner->features[j][index] = getFeatureByte(child_result.updated_anchor, inner->prefix_len, j);
     }
@@ -983,8 +1106,21 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
             .node_underflowed = inner->header.num_items < MIN_FILL};
     }
 
+    inner->child_num_items[index] = inner->children[index]->num_items;
+
+    /* Attempt merge if child underflowed */
+    if (child_result.node_underflowed && inner->header.num_items > 1) {
+        tryMergeChild(fbt, inner, index);
+    }
+
+    /* Recompute updated_anchor: after a merge, the last child may have changed */
+    sds updated_anchor = NULL;
+    if (child_result.updated_anchor || index >= inner->header.num_items) {
+        updated_anchor = inner->anchors[inner->header.num_items - 1];
+    }
+
     deleteResult result = {
-        .updated_anchor = index == inner->header.num_items - 1 ? child_result.updated_anchor : NULL,
+        .updated_anchor = updated_anchor,
         .delete_executed = true,
         .node_underflowed = inner->header.num_items < MIN_FILL};
     return result;
@@ -1002,6 +1138,7 @@ static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
     } else if (!fbt->root->is_leaf && fbt->root->num_items == 1) {
         innerNode *old_root = (innerNode *)fbt->root;
         fbt->root = old_root->children[0];
+        innerNodeFreePrefix(old_root);
         zfree(old_root);
     }
 }
@@ -1016,7 +1153,7 @@ bool fbtreeDelete(fbtreeIndex *fbt, const_sds item) {
     return true;
 }
 
-static deleteResult subtreePop(node *n, TraversalHint hint, bool free_item) {
+static deleteResult subtreePop(fbtreeIndex *fbt, node *n, TraversalHint hint, bool free_item) {
     assert(hint != HINT_NONE);
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
@@ -1032,13 +1169,17 @@ static deleteResult subtreePop(node *n, TraversalHint hint, bool free_item) {
     innerNode *inner = (innerNode *)n;
     int index = (hint == HINT_LEFTMOST) ? 0 : inner->header.num_items - 1;
 
-    deleteResult child_result = subtreePop(inner->children[index], hint, free_item);
+    deleteResult child_result = subtreePop(fbt, inner->children[index], hint, free_item);
     if (!child_result.delete_executed) return child_result;
 
     inner->child_sizes[index]--;
 
     if (child_result.updated_anchor) {
         inner->anchors[index] = child_result.updated_anchor;
+        /* If the first or last anchor changed, the common prefix may need shortening */
+        if (index == 0 || index == inner->header.num_items - 1) {
+            updateCommonPrefix(inner);
+        }
         for (int j = 0; j < FEATURE_SIZE; j++)
             inner->features[j][index] = getFeatureByte(child_result.updated_anchor, inner->prefix_len, j);
     }
@@ -1058,8 +1199,21 @@ static deleteResult subtreePop(node *n, TraversalHint hint, bool free_item) {
             .node_underflowed = inner->header.num_items < MIN_FILL};
     }
 
+    inner->child_num_items[index] = inner->children[index]->num_items;
+
+    /* Attempt merge if child underflowed */
+    if (child_result.node_underflowed && inner->header.num_items > 1) {
+        tryMergeChild(fbt, inner, index);
+    }
+
+    /* Recompute updated_anchor: after a merge, the last child may have changed */
+    sds updated_anchor = NULL;
+    if (child_result.updated_anchor || index >= inner->header.num_items) {
+        updated_anchor = inner->anchors[inner->header.num_items - 1];
+    }
+
     deleteResult result = {
-        .updated_anchor = index == inner->header.num_items - 1 ? child_result.updated_anchor : NULL,
+        .updated_anchor = updated_anchor,
         .delete_executed = true,
         .node_underflowed = inner->header.num_items < MIN_FILL};
     return result;
@@ -1077,7 +1231,7 @@ sds fbtreePopMin(fbtreeIndex *fbt) {
     if (leaf->header.num_items == 1)
         fbt->leftmost_leaf = leaf->next;
 
-    subtreePop(fbt->root, HINT_LEFTMOST, false);
+    subtreePop(fbt, fbt->root, HINT_LEFTMOST, false);
     fbtreePostDeleteCleanup(fbt);
     return item;
 }
@@ -1094,7 +1248,7 @@ sds fbtreePopMax(fbtreeIndex *fbt) {
     if (leaf->header.num_items == 1)
         fbt->rightmost_leaf = leaf->prev;
 
-    subtreePop(fbt->root, HINT_RIGHTMOST, false);
+    subtreePop(fbt, fbt->root, HINT_RIGHTMOST, false);
     fbtreePostDeleteCleanup(fbt);
     return item;
 }
@@ -1507,6 +1661,7 @@ static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start
                     zfree(empty);
                     innerNodeRemoveChild(inner, ci);
                 } else {
+                    inner->child_num_items[ci] = inner->children[ci]->num_items;
                     /* Anchor may have changed if we removed the last element */
                     sds new_anchor = inner->children[ci]->is_leaf
                                          ? leafNodeHighKey((leafNode *)inner->children[ci])
@@ -1646,6 +1801,7 @@ static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start
                 zfree(inner->children[ci]);
                 inner->header.num_items = ci;
             } else {
+                inner->child_num_items[ci] = inner->children[ci]->num_items;
                 sds new_anchor = inner->children[ci]->is_leaf
                                      ? leafNodeHighKey((leafNode *)inner->children[ci])
                                      : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
@@ -1675,6 +1831,7 @@ static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start
                 zfree(inner->children[new_ci]);
                 innerNodeRemoveChildrenRange(inner, 0, 0);
             } else {
+                inner->child_num_items[new_ci] = inner->children[new_ci]->num_items;
                 sds new_anchor = inner->children[new_ci]->is_leaf
                                      ? leafNodeHighKey((leafNode *)inner->children[new_ci])
                                      : ((innerNode *)inner->children[new_ci])->anchors[((innerNode *)inner->children[new_ci])->header.num_items - 1];
@@ -1715,6 +1872,7 @@ static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start
             /* Rebuild anchors/features for all surviving children */
             for (int i = 0; i < split_node->header.num_items; i++) {
                 split_node->child_sizes[i] = getSubtreeSize(split_node->children[i]);
+                split_node->child_num_items[i] = split_node->children[i]->num_items;
                 sds anchor = split_node->children[i]->is_leaf
                                  ? leafNodeHighKey((leafNode *)split_node->children[i])
                                  : ((innerNode *)split_node->children[i])->anchors[((innerNode *)split_node->children[i])->header.num_items - 1];
@@ -1735,6 +1893,7 @@ static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start
                 zfree(inner->children[ci]);
                 innerNodeRemoveChild(inner, ci);
             } else {
+                inner->child_num_items[ci] = inner->children[ci]->num_items;
                 sds new_anchor = inner->children[ci]->is_leaf
                                      ? leafNodeHighKey((leafNode *)inner->children[ci])
                                      : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
@@ -1742,6 +1901,57 @@ static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start
                 for (int j = 0; j < FEATURE_SIZE; j++)
                     inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
                 if (ci == 0 || ci == inner->header.num_items - 1) updateCommonPrefix(inner);
+            }
+        }
+
+        /* --- Phase 5: Post-fixup merge pass for underflowed boundary nodes --- */
+
+        /* Left sub-path (bottom-up): boundary child is at left_sub_idx[d] */
+        for (int d = left_sub_depth - 1; d >= 0; d--) {
+            innerNode *inner = (innerNode *)left_sub_path[d];
+            if (inner->header.num_items <= 1) continue;
+            int ci = left_sub_idx[d];
+            /* After Phase 4, children to the right of ci were removed, so ci
+             * may now be beyond the valid range if the boundary child was freed. */
+            if (ci >= inner->header.num_items) continue;
+            if (inner->child_num_items[ci] < MIN_FILL) {
+                tryMergeChild(fbt, inner, ci);
+            }
+        }
+
+        /* Right sub-path (bottom-up): after Phase 4 fixup, left children were
+         * removed so the boundary child is now at index 0. */
+        for (int d = right_sub_depth - 1; d >= 0; d--) {
+            innerNode *inner = (innerNode *)right_sub_path[d];
+            if (inner->header.num_items <= 1) continue;
+            if (inner->child_num_items[0] < MIN_FILL) {
+                tryMergeChild(fbt, inner, 0);
+            }
+        }
+
+        /* Split node: check each surviving child for underflow.
+         * Walk backwards so index shifts from merges don't skip children. */
+        if (split_node->header.num_items > 1) {
+            for (int i = split_node->header.num_items - 1; i >= 0; i--) {
+                if (split_node->child_num_items[i] < MIN_FILL) {
+                    tryMergeChild(fbt, split_node, i);
+                }
+            }
+        }
+
+        /* Ancestors above the split node (bottom-up): update child_num_items
+         * (may have changed due to merges below) and check for underflow. */
+        for (int d = split_depth - 1; d >= 0; d--) {
+            innerNode *inner = (innerNode *)left_path[d];
+            if (inner->header.num_items <= 1) continue;
+            int ci = left_child_idx[d];
+            /* The child may have been removed during Phase 4 ancestor fixup
+             * if its subtree became empty. */
+            if (ci >= inner->header.num_items) continue;
+            /* Refresh child_num_items since merges below may have changed it */
+            inner->child_num_items[ci] = inner->children[ci]->num_items;
+            if (inner->child_num_items[ci] < MIN_FILL) {
+                tryMergeChild(fbt, inner, ci);
             }
         }
     }
@@ -1943,16 +2153,20 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
         /* Validate stored size matches actual size */
         bool size_ok = (inner->child_sizes[i] == child_result.size);
 
-        valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && child_result.valid;
+        /* Validate child_num_items matches child's actual num_items */
+        bool num_items_ok = (inner->child_num_items[i] == inner->children[i]->num_items);
+
+        valid = valid && prefix_ok && anchor_ok && feature_ok && size_ok && num_items_ok && child_result.valid;
         total_size += child_result.size;
 
-        if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok)) {
+        if (verbose && (!prefix_ok || !anchor_ok || !feature_ok || !size_ok || !num_items_ok)) {
             printIndent(depth);
             printf("   \033[31m");
             if (!prefix_ok) printf("prefix ");
             if (!anchor_ok) printf("anchor ");
             if (!feature_ok) printf("feature ");
             if (!size_ok) printf("size(%zu!=%zu) ", inner->child_sizes[i], child_result.size);
+            if (!num_items_ok) printf("num_items(%u!=%u) ", inner->child_num_items[i], inner->children[i]->num_items);
             printf("FAIL\033[0m\n");
         }
     }
@@ -2000,4 +2214,37 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
     }
 
     return result.valid && length_ok && caches_ok;
+}
+
+/* Validate merge enforcement: no non-root node has num_items < MIN_FILL
+ * unless all siblings have num_items + node.num_items > NODE_SIZE.
+ * Returns true if the property holds. */
+static bool validateMergeEnforcementInner(innerNode *inner) {
+    /* Check each child: if it has num_items < MIN_FILL, verify no sibling could absorb it */
+    for (int i = 0; i < inner->header.num_items; i++) {
+        int child_items = inner->child_num_items[i];
+        if (child_items < MIN_FILL) {
+            /* Check left sibling */
+            if (i > 0 && inner->child_num_items[i - 1] + child_items <= NODE_SIZE) {
+                return false; /* Could have merged with left sibling */
+            }
+            /* Check right sibling */
+            if (i < inner->header.num_items - 1 && inner->child_num_items[i + 1] + child_items <= NODE_SIZE) {
+                return false; /* Could have merged with right sibling */
+            }
+        }
+
+        /* Recurse into inner children */
+        if (!inner->children[i]->is_leaf) {
+            if (!validateMergeEnforcementInner((innerNode *)inner->children[i])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool fbtreeDebugValidateMergeEnforcement(fbtreeIndex *fbt) {
+    if (!fbt->root || fbt->root->is_leaf) return true;
+    return validateMergeEnforcementInner((innerNode *)fbt->root);
 }
