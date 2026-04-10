@@ -2718,13 +2718,13 @@ TEST_F(FbtreeTest, SeekToValuePropertySharedPrefixDiscrimination) {
 /* ========== fbtreeDeleteRangeByRank Tests ========== */
 
 TEST_F(FbtreeTest, DeleteRangeByRankEmpty) {
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 0, NULL, NULL), 0u);
     expectValid();
 }
 
 TEST_F(FbtreeTest, DeleteRangeByRankSingle) {
     insert("a");
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 0), 1u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 0, NULL, NULL), 1u);
     EXPECT_EQ(fbtreeLength(fbt), 0u);
     expectValid();
 }
@@ -2733,7 +2733,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankAll) {
     for (int i = 0; i < 10; i++) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 9), 10u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 9, NULL, NULL), 10u);
     EXPECT_EQ(fbtreeLength(fbt), 0u);
     expectValid();
 }
@@ -2743,7 +2743,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankMiddle) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
     /* Delete ranks 3..6 (4 elements: AAD, AAE, AAF, AAG) */
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 6), 4u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 6, NULL, NULL), 4u);
     EXPECT_EQ(fbtreeLength(fbt), 6u);
     expectValid();
 
@@ -2759,7 +2759,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankFirst) {
     for (int i = 0; i < 10; i++) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 2), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 0, 2, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 7u);
     expectValid();
 
@@ -2773,7 +2773,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankLast) {
     for (int i = 0; i < 10; i++) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 7, 9), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 7, 9, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 7u);
     expectValid();
 
@@ -2788,7 +2788,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankOutOfBounds) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
     /* end_rank beyond length - should clamp */
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 100), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 100, NULL, NULL), 2u);
     EXPECT_EQ(fbtreeLength(fbt), 3u);
     expectValid();
 
@@ -2802,7 +2802,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankStartBeyondLength) {
     for (int i = 0; i < 5; i++) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 10, 20), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 10, 20, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 5u);
     expectValid();
 }
@@ -2812,7 +2812,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankInvertedRange) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
     /* start > end should delete nothing */
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 1), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 3, 1, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 5u);
     expectValid();
 }
@@ -2829,7 +2829,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankMultilevel) {
     unsigned long start = TEST_NODE_CAPACITY / 2;
     unsigned long end = TEST_NODE_CAPACITY * 2 + TEST_NODE_CAPACITY / 2;
     unsigned long expected = end - start + 1;
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, start, end), expected);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, start, end, NULL, NULL), expected);
     EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - expected));
     expectValid();
 
@@ -2852,7 +2852,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankThenInsert) {
     for (int i = 0; i < 20; i++) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 5, 14), 10u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 5, 14, NULL, NULL), 10u);
     EXPECT_EQ(fbtreeLength(fbt), 10u);
     expectValid();
 
@@ -2879,7 +2879,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankDeepTree) {
     unsigned long mid = N / 3;
     unsigned long end = 2 * N / 3;
     unsigned long expected = end - mid + 1;
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, mid, end), expected);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, mid, end, NULL, NULL), expected);
     EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - expected));
     expectValid();
 }
@@ -2887,7 +2887,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankDeepTree) {
 /* ========== fbtreeDeleteRangeByScore Tests ========== */
 
 TEST_F(FbtreeTest, DeleteRangeByScoreEmpty) {
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "ZZZZZZZZ", 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "ZZZZZZZZ", 0, 0, NULL, NULL), 0u);
     expectValid();
 }
 
@@ -2897,7 +2897,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreAll) {
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
     /* Range covers all scores */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "CCCCCCCC", 0, 0), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "CCCCCCCC", 0, 0, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 0u);
     expectValid();
 }
@@ -2910,7 +2910,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreMiddle) {
     fbtreeInsert(fbt, createString("EEEEEEEEelem_4"));
 
     /* Delete B and C scores */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0, NULL, NULL), 2u);
     EXPECT_EQ(fbtreeLength(fbt), 3u);
     expectValid();
 
@@ -2927,7 +2927,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreExclusiveMin) {
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
     /* Exclusive min: should skip B, only delete C */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 1, 0), 1u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 1, 0, NULL, NULL), 1u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     expectValid();
 
@@ -2942,7 +2942,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreExclusiveMax) {
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
     /* Exclusive max: should skip C, only delete B */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 1), 1u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 1, NULL, NULL), 1u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     expectValid();
 
@@ -2958,7 +2958,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreBothExclusive) {
     fbtreeInsert(fbt, createString("DDDDDDDDelem_3"));
 
     /* Both exclusive on B..D: should only delete C */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "DDDDDDDD", 1, 1), 1u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "DDDDDDDD", 1, 1, NULL, NULL), 1u);
     EXPECT_EQ(fbtreeLength(fbt), 3u);
     expectValid();
 
@@ -2974,7 +2974,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreNoMatch) {
     fbtreeInsert(fbt, createString("DDDDDDDDelem_1"));
 
     /* Range between existing scores - nothing to delete */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     expectValid();
 }
@@ -2984,7 +2984,7 @@ TEST_F(FbtreeTest, DeleteRangeByScorePastEnd) {
     fbtreeInsert(fbt, createString("BBBBBBBBelem_1"));
 
     /* Range entirely beyond all elements */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "YYYYYYYY", "ZZZZZZZZ", 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "YYYYYYYY", "ZZZZZZZZ", 0, 0, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     expectValid();
 }
@@ -2994,7 +2994,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreBeforeStart) {
     fbtreeInsert(fbt, createString("NNNNNNNNelem_1"));
 
     /* Range entirely before all elements */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "BBBBBBBB", 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "AAAAAAAA", "BBBBBBBB", 0, 0, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     expectValid();
 }
@@ -3006,7 +3006,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreDuplicateScores) {
     fbtreeInsert(fbt, createString("BBBBBBBBccc"));
     fbtreeInsert(fbt, createString("CCCCCCCCddd"));
 
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "BBBBBBBB", 0, 0), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "BBBBBBBB", 0, 0, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 1u);
     expectValid();
 
@@ -3035,7 +3035,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreMultilevel) {
     snprintf(max_score, sizeof(max_score), "%08d", 3 * N / 4);
 
     unsigned long before = fbtreeLength(fbt);
-    unsigned long deleted = fbtreeDeleteRangeByScore(fbt, min_score, max_score, 0, 0);
+    unsigned long deleted = fbtreeDeleteRangeByScore(fbt, min_score, max_score, 0, 0, NULL, NULL);
     EXPECT_GT(deleted, 0u);
     EXPECT_EQ(fbtreeLength(fbt), before - deleted);
     expectValid();
@@ -3051,7 +3051,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreThenInsert) {
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
     fbtreeInsert(fbt, createString("DDDDDDDDelem_3"));
 
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 0, 0, NULL, NULL), 2u);
     expectValid();
 
     /* Insert into the gap */
@@ -3071,7 +3071,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreThenInsert) {
 TEST_F(FbtreeTest, DeleteRangeByValueEmpty) {
     sds min_val = createString("aaa");
     sds max_val = createString("zzz");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL), 0u);
     sdsfree(min_val);
     sdsfree(max_val);
     expectValid();
@@ -3084,7 +3084,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueAll) {
 
     sds min_val = createString("aaa");
     sds max_val = createString("eee");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 0u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3100,7 +3100,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueMiddle) {
 
     sds min_val = createString("bbb");
     sds max_val = createString("ddd");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3119,7 +3119,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueExclusiveMin) {
 
     sds min_val = createString("aaa");
     sds max_val = createString("ccc");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 0), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 0, NULL, NULL), 2u);
     EXPECT_EQ(fbtreeLength(fbt), 1u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3137,7 +3137,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueExclusiveMax) {
 
     sds min_val = createString("aaa");
     sds max_val = createString("ccc");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 1), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 1, NULL, NULL), 2u);
     EXPECT_EQ(fbtreeLength(fbt), 1u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3156,7 +3156,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueBothExclusive) {
 
     sds min_val = createString("aaa");
     sds max_val = createString("ddd");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 1), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 1, NULL, NULL), 2u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3174,7 +3174,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueNoMatch) {
 
     sds min_val = createString("bbb");
     sds max_val = createString("ccc");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3189,7 +3189,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueExactMatch) {
     /* min == max, inclusive: delete exactly one element */
     sds val = createString("bbb");
     sds val2 = createString("bbb");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, val, val2, 0, 0), 1u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, val, val2, 0, 0, NULL, NULL), 1u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     sdsfree(val);
     sdsfree(val2);
@@ -3209,7 +3209,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueExactMatchExclusive) {
     /* min == max, both exclusive: delete nothing */
     sds val = createString("bbb");
     sds val2 = createString("bbb");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, val, val2, 1, 1), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, val, val2, 1, 1, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 3u);
     sdsfree(val);
     sdsfree(val2);
@@ -3234,7 +3234,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueMultilevel) {
     sds max_val = createBase26TestString("val_", "", 3 * N / 4, 5);
 
     unsigned long before = fbtreeLength(fbt);
-    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0);
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL);
     EXPECT_GT(deleted, 0u);
     EXPECT_EQ(fbtreeLength(fbt), before - deleted);
     sdsfree(min_val);
@@ -3256,7 +3256,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueWithScorePrefix) {
     /* Delete lex range [ccc, eee] within the same score prefix */
     sds min_val = createString("SCOREAAAccc");
     sds max_val = createString("SCOREAAAeee");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 3u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL), 3u);
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3276,7 +3276,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueThenInsert) {
 
     sds min_val = createString("bbb");
     sds max_val = createString("ccc");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0), 2u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL), 2u);
     sdsfree(min_val);
     sdsfree(max_val);
     expectValid();
@@ -3298,7 +3298,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankSingleMiddle) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
     }
     /* Delete exactly one element at rank 2 */
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 2, 2), 1u);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, 2, 2, NULL, NULL), 1u);
     EXPECT_EQ(fbtreeLength(fbt), 4u);
     expectValid();
 
@@ -3316,7 +3316,7 @@ TEST_F(FbtreeTest, DeleteRangeByScoreAdjacentExclusive) {
     fbtreeInsert(fbt, createString("CCCCCCCCelem_2"));
 
     /* Both exclusive on adjacent scores B..C: nothing between them */
-    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 1, 1), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByScore(fbt, "BBBBBBBB", "CCCCCCCC", 1, 1, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 3u);
     expectValid();
 }
@@ -3329,7 +3329,7 @@ TEST_F(FbtreeTest, DeleteRangeByValueAdjacentExclusive) {
     /* Both exclusive on adjacent values: nothing between bbb and ccc */
     sds min_val = createString("bbb");
     sds max_val = createString("ccc");
-    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 1), 0u);
+    EXPECT_EQ(fbtreeDeleteRangeByValue(fbt, min_val, max_val, 1, 1, NULL, NULL), 0u);
     EXPECT_EQ(fbtreeLength(fbt), 3u);
     sdsfree(min_val);
     sdsfree(max_val);
@@ -3367,7 +3367,7 @@ TEST_F(FbtreeTest, DeleteRangeByRankSweep) {
             unsigned long clamped_end = end >= (unsigned long)N ? (unsigned long)(N - 1) : end;
             unsigned long expected = clamped_end - start + 1;
 
-            unsigned long deleted = fbtreeDeleteRangeByRank(tree, start, end);
+            unsigned long deleted = fbtreeDeleteRangeByRank(tree, start, end, NULL, NULL);
             unsigned long remaining = fbtreeLength(tree);
 
             EXPECT_EQ(deleted, expected)
@@ -3620,7 +3620,7 @@ TEST_F(FbtreeTest, NodeMergeRangeDelete) {
     unsigned long start = TEST_NODE_CAPACITY + 5;
     unsigned long end = TEST_NODE_CAPACITY * 3 - 5;
     unsigned long expected_deleted = end - start + 1;
-    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, start, end), expected_deleted);
+    EXPECT_EQ(fbtreeDeleteRangeByRank(fbt, start, end, NULL, NULL), expected_deleted);
     EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(count - expected_deleted));
     expectValid();
 
@@ -3918,7 +3918,7 @@ TEST_F(FbtreeTest, PropertyTreeInvariantsAfterAnyOperation) {
                 unsigned long start = rand_r(&seed) % len;
                 unsigned long end = start + (rand_r(&seed) % (len - start));
                 if (end >= len) end = len - 1;
-                fbtreeDeleteRangeByRank(tree, start, end);
+                fbtreeDeleteRangeByRank(tree, start, end, NULL, NULL);
             }
 
             ASSERT_TRUE(fbtreeDebugValidate(tree, false))
@@ -4043,4 +4043,1012 @@ TEST_F(FbtreeTest, PropertyMergeEnforcement) {
 
         fbtreeFree(tree);
     }
+}
+
+/* ========== Naive Oracle Helpers ========== */
+
+/* Naive delete-by-score: iterate, collect matching items, delete one-by-one.
+ * This is the original O(K log N) approach preserved as a reference oracle. */
+static unsigned long naiveDeleteRangeByScore(fbtreeIndex *fbt,
+                                             const char *min_score,
+                                             const char *max_score,
+                                             int min_ex,
+                                             int max_ex) {
+    if (fbtreeLength(fbt) == 0) return 0;
+
+    /* Collect items to delete */
+    std::vector<const_sds> to_delete;
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToScore(fbt, min_score, &it);
+
+    const_sds pos;
+    while (fbtreeNext(&it, &pos)) {
+        int cmp_min = memcmp(pos, min_score, 8);
+        int cmp_max = memcmp(pos, max_score, 8);
+
+        if (cmp_min < 0) continue;
+        if (min_ex && cmp_min == 0) continue;
+        if (cmp_max > 0) break;
+        if (max_ex && cmp_max == 0) break;
+
+        to_delete.push_back(pos);
+    }
+
+    /* Delete one by one */
+    for (auto item : to_delete) {
+        fbtreeDelete(fbt, item);
+    }
+    return to_delete.size();
+}
+
+/* Naive delete-by-value: iterate, collect matching items, delete one-by-one.
+ * This is the original O(K log N) approach preserved as a reference oracle. */
+static unsigned long naiveDeleteRangeByValue(fbtreeIndex *fbt,
+                                             const_sds min_val,
+                                             const_sds max_val,
+                                             int min_ex,
+                                             int max_ex) {
+    if (fbtreeLength(fbt) == 0) return 0;
+
+    /* Collect items to delete */
+    std::vector<const_sds> to_delete;
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, min_val, &it);
+
+    const_sds pos;
+    while (fbtreeNext(&it, &pos)) {
+        int cmp_min = sdscmp(pos, min_val);
+        int cmp_max = sdscmp(pos, max_val);
+
+        if (cmp_min < 0) continue;
+        if (min_ex && cmp_min == 0) continue;
+        if (cmp_max > 0) break;
+        if (max_ex && cmp_max == 0) break;
+
+        to_delete.push_back(pos);
+    }
+
+    /* Delete one by one */
+    for (auto item : to_delete) {
+        fbtreeDelete(fbt, item);
+    }
+    return to_delete.size();
+}
+
+/* Helper: collect all elements from a tree into a vector of strings */
+static std::vector<std::string> collectAllElements(fbtreeIndex *fbt) {
+    std::vector<std::string> result;
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    while (fbtreeNext(&it, &pos)) {
+        result.emplace_back(pos, sdslen(pos));
+    }
+    return result;
+}
+
+/* Helper: build a tree from a vector of sds strings (makes copies) */
+static fbtreeIndex *buildTreeFromElements(const std::vector<sds> &elements) {
+    fbtreeIndex *tree = fbtreeCreate();
+    for (auto &elem : elements) {
+        fbtreeInsert(tree, sdsdup(elem));
+    }
+    return tree;
+}
+
+/* ========== Range Delete Equivalence Tests ========== */
+
+/* For any FBTree with N elements and for any valid start_rank and end_rank,
+ * fbtreeDeleteRangeByRank SHALL return end_rank - start_rank + 1, the tree length
+ * SHALL decrease by that amount, and the remaining elements SHALL be exactly those
+ * that were not at ranks in [start_rank, end_rank]. */
+TEST_F(FbtreeTest, DeleteRangeByRankPropertyCorrectness) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 42;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        /* Generate random tree size: small, medium, large */
+        int N;
+        if (iter < 30) {
+            N = 1 + (rand_r(&seed) % 10);
+        } else if (iter < 80) {
+            N = 10 + (rand_r(&seed) % 500);
+        } else {
+            N = 500 + (rand_r(&seed) % 4500);
+        }
+
+        fbtreeIndex *tree = fbtreeCreate();
+        for (int i = 0; i < N; i++) {
+            sds s = generateUniqueKey("rp_", key_counter++, &seed);
+            fbtreeInsert(tree, s);
+        }
+
+        /* Record all elements before deletion */
+        std::vector<std::string> before = collectAllElements(tree);
+        ASSERT_EQ(before.size(), (size_t)N) << "iter=" << iter;
+
+        /* Generate random rank range */
+        unsigned long start_rank = rand_r(&seed) % N;
+        unsigned long end_rank = start_rank + (rand_r(&seed) % (N - start_rank));
+        unsigned long expected_deleted = end_rank - start_rank + 1;
+
+        /* Execute range delete */
+        unsigned long deleted = fbtreeDeleteRangeByRank(tree, start_rank, end_rank, NULL, NULL);
+
+        /* Verify return count */
+        EXPECT_EQ(deleted, expected_deleted)
+            << "iter=" << iter << " start=" << start_rank << " end=" << end_rank;
+
+        /* Verify tree length */
+        EXPECT_EQ(fbtreeLength(tree), (unsigned long)(N - expected_deleted))
+            << "iter=" << iter;
+
+        /* Verify tree validation passes */
+        EXPECT_TRUE(fbtreeDebugValidate(tree, false))
+            << "Validation failed at iter=" << iter;
+
+        /* Verify merge enforcement */
+        EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(tree))
+            << "Merge enforcement violated at iter=" << iter;
+
+        /* Verify sorted order */
+        std::vector<std::string> after = collectAllElements(tree);
+        EXPECT_EQ(after.size(), (size_t)(N - expected_deleted)) << "iter=" << iter;
+        for (size_t i = 1; i < after.size(); i++) {
+            EXPECT_LT(after[i - 1], after[i])
+                << "Sorted order violated at iter=" << iter << " pos=" << i;
+        }
+
+        /* Verify correct elements removed */
+        std::vector<std::string> expected_remaining;
+        for (size_t i = 0; i < before.size(); i++) {
+            if (i < start_rank || i > end_rank) {
+                expected_remaining.push_back(before[i]);
+            }
+        }
+        EXPECT_EQ(after, expected_remaining)
+            << "Wrong elements remaining at iter=" << iter;
+
+        fbtreeFree(tree);
+    }
+}
+
+/* For any FBTree with N score-prefixed elements and for any min_score, max_score,
+ * min_ex, max_ex parameters, the optimized fbtreeDeleteRangeByScore SHALL delete
+ * exactly the same set of elements and return the same count as the naive
+ * iterate-and-delete implementation. */
+TEST_F(FbtreeTest, DeleteRangeByScorePropertyEquivalence) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 123;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        /* Generate random tree size */
+        int N;
+        if (iter < 30) {
+            N = 1 + (rand_r(&seed) % 10);
+        } else if (iter < 80) {
+            N = 10 + (rand_r(&seed) % 500);
+        } else {
+            N = 500 + (rand_r(&seed) % 4500);
+        }
+
+        /* Generate random score-prefixed elements */
+        std::vector<sds> elements;
+        for (int i = 0; i < N; i++) {
+            /* Generate random 8-byte score prefix */
+            char score[8];
+            for (int b = 0; b < 8; b++) {
+                score[b] = (char)(rand_r(&seed) % 256);
+            }
+            /* Append a unique suffix */
+            char suffix[16];
+            snprintf(suffix, sizeof(suffix), "e%06d", i);
+            size_t suffix_len = strlen(suffix) + 1;
+            sds s = sdsnewlen(NULL, 8 + suffix_len);
+            memcpy(s, score, 8);
+            memcpy(s + 8, suffix, suffix_len);
+            elements.push_back(s);
+        }
+
+        /* Build two identical trees */
+        fbtreeIndex *tree_optimized = buildTreeFromElements(elements);
+        fbtreeIndex *tree_naive = buildTreeFromElements(elements);
+
+        /* Generate random score range */
+        char min_score[8], max_score[8];
+        for (int b = 0; b < 8; b++) {
+            min_score[b] = (char)(rand_r(&seed) % 256);
+            max_score[b] = (char)(rand_r(&seed) % 256);
+        }
+        /* Ensure min <= max */
+        if (memcmp(min_score, max_score, 8) > 0) {
+            char tmp[8];
+            memcpy(tmp, min_score, 8);
+            memcpy(min_score, max_score, 8);
+            memcpy(max_score, tmp, 8);
+        }
+
+        int min_ex = rand_r(&seed) % 2;
+        int max_ex = rand_r(&seed) % 2;
+
+        /* Apply optimized range delete to one tree */
+        unsigned long deleted_optimized = fbtreeDeleteRangeByScore(
+            tree_optimized, min_score, max_score, min_ex, max_ex, NULL, NULL);
+
+        /* Apply naive to other tree */
+        unsigned long deleted_naive = naiveDeleteRangeByScore(
+            tree_naive, min_score, max_score, min_ex, max_ex);
+
+        /* Compare return counts */
+        EXPECT_EQ(deleted_optimized, deleted_naive)
+            << "Delete count mismatch at iter=" << iter
+            << " min_ex=" << min_ex << " max_ex=" << max_ex;
+
+        /* Compare remaining elements */
+        std::vector<std::string> remaining_optimized = collectAllElements(tree_optimized);
+        std::vector<std::string> remaining_naive = collectAllElements(tree_naive);
+        EXPECT_EQ(remaining_optimized, remaining_naive)
+            << "Remaining elements mismatch at iter=" << iter;
+
+        /* Validate optimized tree */
+        EXPECT_TRUE(fbtreeDebugValidate(tree_optimized, false))
+            << "Validation failed at iter=" << iter;
+
+        /* Verify merge enforcement */
+        EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(tree_optimized))
+            << "Merge enforcement violated at iter=" << iter;
+
+        /* Cleanup */
+        fbtreeFree(tree_optimized);
+        fbtreeFree(tree_naive);
+        for (auto &s : elements) sdsfree(s);
+    }
+}
+
+/* For any FBTree with N elements and for any min_val, max_val, min_ex, max_ex
+ * parameters, the optimized fbtreeDeleteRangeByValue SHALL delete exactly the same
+ * set of elements and return the same count as the naive iterate-and-delete
+ * implementation. */
+TEST_F(FbtreeTest, DeleteRangeByValuePropertyEquivalence) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 150;
+    unsigned int seed = 456;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        /* Generate random tree size */
+        int N;
+        if (iter < 30) {
+            N = 1 + (rand_r(&seed) % 10);
+        } else if (iter < 80) {
+            N = 10 + (rand_r(&seed) % 500);
+        } else {
+            N = 500 + (rand_r(&seed) % 4500);
+        }
+
+        /* Generate random elements */
+        std::vector<sds> elements;
+        for (int i = 0; i < N; i++) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "vp_%08d", key_counter++);
+            elements.push_back(createString(buf));
+        }
+
+        /* Build two identical trees */
+        fbtreeIndex *tree_optimized = buildTreeFromElements(elements);
+        fbtreeIndex *tree_naive = buildTreeFromElements(elements);
+
+        /* Generate random value range by picking two elements or nearby values */
+        int idx_a = rand_r(&seed) % N;
+        int idx_b = rand_r(&seed) % N;
+
+        /* Sort the elements to pick range bounds from sorted order */
+        std::vector<std::string> sorted_elems = collectAllElements(tree_optimized);
+
+        size_t lo, hi;
+        if ((size_t)idx_a < (size_t)idx_b) {
+            lo = (size_t)idx_a % sorted_elems.size();
+            hi = (size_t)idx_b % sorted_elems.size();
+        } else {
+            lo = (size_t)idx_b % sorted_elems.size();
+            hi = (size_t)idx_a % sorted_elems.size();
+        }
+
+        sds min_val = sdsnewlen(sorted_elems[lo].data(), sorted_elems[lo].size());
+        sds max_val = sdsnewlen(sorted_elems[hi].data(), sorted_elems[hi].size());
+
+        int min_ex = rand_r(&seed) % 2;
+        int max_ex = rand_r(&seed) % 2;
+
+        /* Apply optimized range delete to one tree */
+        unsigned long deleted_optimized = fbtreeDeleteRangeByValue(
+            tree_optimized, min_val, max_val, min_ex, max_ex, NULL, NULL);
+
+        /* Apply naive to other tree */
+        unsigned long deleted_naive = naiveDeleteRangeByValue(
+            tree_naive, min_val, max_val, min_ex, max_ex);
+
+        /* Compare return counts */
+        EXPECT_EQ(deleted_optimized, deleted_naive)
+            << "Delete count mismatch at iter=" << iter
+            << " min_ex=" << min_ex << " max_ex=" << max_ex;
+
+        /* Compare remaining elements */
+        std::vector<std::string> remaining_optimized = collectAllElements(tree_optimized);
+        std::vector<std::string> remaining_naive = collectAllElements(tree_naive);
+        EXPECT_EQ(remaining_optimized, remaining_naive)
+            << "Remaining elements mismatch at iter=" << iter;
+
+        /* Validate optimized tree */
+        EXPECT_TRUE(fbtreeDebugValidate(tree_optimized, false))
+            << "Validation failed at iter=" << iter;
+
+        /* Verify merge enforcement */
+        EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(tree_optimized))
+            << "Merge enforcement violated at iter=" << iter;
+
+        /* Cleanup */
+        fbtreeFree(tree_optimized);
+        fbtreeFree(tree_naive);
+        sdsfree(min_val);
+        sdsfree(max_val);
+        for (auto &s : elements) sdsfree(s);
+    }
+}
+
+/* ========== Callback Tests ========== */
+
+/* Context for tracking deleted items in the callback test */
+struct CallbackTracker {
+    std::vector<std::string> deleted_items;
+};
+
+static void trackDeletedItem(sds item, void *ctx) {
+    CallbackTracker *tracker = (CallbackTracker *)ctx;
+    tracker->deleted_items.emplace_back(item, sdslen(item));
+}
+
+/* Verify that the item deletion callback is invoked for every deleted item
+ * with the correct sds pointer. */
+TEST_F(FbtreeTest, DeleteRangeCallbackInvocation) {
+    const int N = 200;
+    char buf[24];
+
+    /* Insert N elements */
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "cb_%06d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Record elements that should be deleted (ranks 50..149) */
+    std::vector<std::string> expected_deleted;
+    for (int i = 50; i <= 149; i++) {
+        const_sds at_rank = fbtreeGetAtRank(fbt, i);
+        ASSERT_NE(at_rank, nullptr);
+        expected_deleted.emplace_back(at_rank, sdslen(at_rank));
+    }
+
+    /* Delete with callback */
+    CallbackTracker tracker;
+    unsigned long deleted = fbtreeDeleteRangeByRank(
+        fbt, 50, 149, trackDeletedItem, &tracker);
+
+    EXPECT_EQ(deleted, 100u);
+    EXPECT_EQ(fbtreeLength(fbt), 100u);
+    expectValid();
+
+    /* Verify callback was invoked for every deleted item */
+    ASSERT_EQ(tracker.deleted_items.size(), expected_deleted.size());
+
+    /* Sort both vectors since callback order may differ from rank order
+     * (e.g., subtree freeing order) */
+    std::vector<std::string> sorted_tracked = tracker.deleted_items;
+    std::vector<std::string> sorted_expected = expected_deleted;
+    std::sort(sorted_tracked.begin(), sorted_tracked.end());
+    std::sort(sorted_expected.begin(), sorted_expected.end());
+    EXPECT_EQ(sorted_tracked, sorted_expected);
+}
+
+/* Callback test with delete-all: verify callback fires for every element */
+TEST_F(FbtreeTest, DeleteRangeCallbackDeleteAll) {
+    const int N = 50;
+    char buf[24];
+
+    std::vector<std::string> all_elements;
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "cba_%04d", i);
+        sds inserted = fbtreeInsert(fbt, createString(buf));
+        all_elements.emplace_back(inserted, sdslen(inserted));
+    }
+    expectValid();
+
+    CallbackTracker tracker;
+    unsigned long deleted = fbtreeDeleteRangeByRank(
+        fbt, 0, N - 1, trackDeletedItem, &tracker);
+
+    EXPECT_EQ(deleted, (unsigned long)N);
+    EXPECT_EQ(fbtreeLength(fbt), 0u);
+
+    /* Verify all items were reported */
+    ASSERT_EQ(tracker.deleted_items.size(), (size_t)N);
+    std::vector<std::string> sorted_tracked = tracker.deleted_items;
+    std::vector<std::string> sorted_expected = all_elements;
+    std::sort(sorted_tracked.begin(), sorted_tracked.end());
+    std::sort(sorted_expected.begin(), sorted_expected.end());
+    EXPECT_EQ(sorted_tracked, sorted_expected);
+}
+
+/* Callback test with NULL callback: verify normal behavior (no crash) */
+TEST_F(FbtreeTest, DeleteRangeCallbackNull) {
+    for (int i = 0; i < 20; i++) {
+        fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
+    }
+    expectValid();
+
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, 5, 14, NULL, NULL);
+    EXPECT_EQ(deleted, 10u);
+    EXPECT_EQ(fbtreeLength(fbt), 10u);
+    expectValid();
+}
+
+/* ========== Prefix Monotonicity / validated_len Tests ========== */
+
+/* A parent's prefix can exceed a child's prefix even with pure inserts.
+ * When a few early elements have a shorter common prefix with the rest of
+ * the tree, the leftmost child spans a wider range than the parent's anchors
+ * suggest. Example: insert one "59..." element then many "60..." elements.
+ * The root's anchors are all "60..." (prefix="60"), but child[0] contains
+ * the "59..." element (prefix=""). Lookups for "59..." must still work. */
+TEST_F(FbtreeTest, LookupWithParentPrefixExceedingChildPrefix) {
+    /* Insert a small number of "59" items, then fill the tree with "60" items.
+     * This creates a root whose anchors all share "60" as a prefix, but the
+     * leftmost child contains "59" items with a shorter common prefix. */
+    char buf[24];
+
+    /* Insert a few items with prefix "59" */
+    for (int i = 0; i < 5; i++) {
+        snprintf(buf, sizeof(buf), "59_%06d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+
+    /* Insert many items with prefix "60" to force splits and create a
+     * multi-level tree where most anchors start with "60" */
+    for (int i = 0; i < TEST_NODE_CAPACITY * 4; i++) {
+        snprintf(buf, sizeof(buf), "60_%06d", i);
+        fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Verify all "59" items are findable via GetRankOfItem (uses validated_len) */
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "59_", 3), 0);
+
+    /* Seek to a "59" value — must route to the correct child despite
+     * the parent's prefix being "60" (longer than child's prefix) */
+    sds seek_val = createString("59_000000");
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "59_000000", 10), 0);
+    sdsfree(seek_val);
+
+    /* Seek to something between "59" and "60" */
+    seek_val = createString("59_zzzzzz");
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "60_", 3), 0);
+    sdsfree(seek_val);
+
+    /* Verify full iteration order */
+    fbtreeInitIterator(&it, fbt);
+    const_sds prev = nullptr;
+    int count = 0;
+    while (fbtreeNext(&it, &pos)) {
+        if (prev) {
+            EXPECT_LT(sdscmp(prev, pos), 0) << "Order violated at " << count;
+        }
+        prev = pos;
+        count++;
+    }
+    EXPECT_EQ((size_t)count, fbtreeLength(fbt));
+}
+
+/* After bulk deletion, a parent's prefix can exceed a child's prefix.
+ * This test constructs that scenario and verifies lookups still work:
+ * - Build a tree where all anchors share a long prefix (e.g., "prefix_06...")
+ * - But the leftmost child contains items with a shorter common prefix
+ *   (e.g., "prefix_05..." through "prefix_06...")
+ * - After deleting middle children, the parent's prefix grows
+ * - Lookups for keys below the prefix (e.g., "prefix_05...") must still
+ *   route to the correct leftmost child via the prefix < comparison */
+TEST_F(FbtreeTest, LookupAfterPrefixGrowthFromBulkDelete) {
+    /* Build a tree with items spanning prefix_050000 through prefix_069999.
+     * The root's children will have anchors like prefix_05XXXX and prefix_06XXXX,
+     * giving the root a short prefix ("prefix_0"). After deleting the middle
+     * range, the remaining children may all start with "prefix_06", growing
+     * the root's prefix to "prefix_06" while the leftmost child still has
+     * items starting with "prefix_05". */
+    const int N = TEST_NODE_CAPACITY * 6;
+    char buf[24];
+    sds *inserted = (sds *)zmalloc(N * sizeof(sds));
+
+    for (int i = 0; i < N; i++) {
+        snprintf(buf, sizeof(buf), "prefix_%06d", 50000 + i);
+        inserted[i] = fbtreeInsert(fbt, createString(buf));
+    }
+    expectValid();
+
+    /* Delete a range from the middle that removes all "prefix_05XXXX" items
+     * except those in the leftmost child. This should cause the parent's
+     * prefix to grow past the leftmost child's prefix. */
+    unsigned long start = TEST_NODE_CAPACITY;
+    unsigned long end = N / 2;
+    fbtreeDeleteRangeByRank(fbt, start, end, NULL, NULL);
+    expectValid();
+
+    /* Now look up items that are still in the tree — especially the early
+     * ones whose prefix diverges from the parent's grown prefix */
+    for (unsigned long i = 0; i < start; i++) {
+        long rank = fbtreeGetRankOfItem(fbt, inserted[i]);
+        EXPECT_GE(rank, 0) << "Failed to find item at original index " << i;
+    }
+
+    /* Look up via SeekToValue for a key below the parent's prefix */
+    sds seek_val = createString("prefix_050000");
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    fbtreeSeekToValue(fbt, seek_val, &it);
+    const_sds pos;
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "prefix_050000", 14), 0);
+    sdsfree(seek_val);
+
+    /* Verify forward iteration produces all remaining elements in order */
+    fbtreeInitIterator(&it, fbt);
+    const_sds prev = nullptr;
+    int count = 0;
+    while (fbtreeNext(&it, &pos)) {
+        if (prev) {
+            EXPECT_LT(sdscmp(prev, pos), 0) << "Sorted order violated at position " << count;
+        }
+        prev = pos;
+        count++;
+    }
+    EXPECT_EQ((size_t)count, fbtreeLength(fbt));
+
+    zfree(inserted);
+}
+
+/* After any range delete, all remaining items must be findable
+ * via fbtreeGetRankOfItem. This catches lookup routing bugs. */
+TEST_F(FbtreeTest, PropertyAllItemsFindableAfterRangeDelete) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 100;
+    unsigned int seed = 9999;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        int N;
+        if (iter < 30) {
+            N = 10 + (rand_r(&seed) % 50);
+        } else if (iter < 70) {
+            N = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            N = 500 + (rand_r(&seed) % 4500);
+        }
+
+        fbtreeIndex *tree = fbtreeCreate();
+        std::vector<sds> items;
+        items.reserve(N);
+
+        for (int i = 0; i < N; i++) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "fi_%08d", key_counter++);
+            sds ins = fbtreeInsert(tree, createString(buf));
+            items.push_back(ins);
+        }
+
+        /* Delete a random range */
+        unsigned long start_rank = rand_r(&seed) % N;
+        unsigned long end_rank = start_rank + (rand_r(&seed) % (N - start_rank));
+        fbtreeDeleteRangeByRank(tree, start_rank, end_rank, NULL, NULL);
+
+        /* Every surviving item must be findable */
+        unsigned long remaining = fbtreeLength(tree);
+        for (unsigned long r = 0; r < remaining; r++) {
+            const_sds at_rank = fbtreeGetAtRank(tree, r);
+            ASSERT_NE(at_rank, nullptr) << "iter=" << iter << " rank=" << r;
+            long found_rank = fbtreeGetRankOfItem(tree, at_rank);
+            ASSERT_EQ(found_rank, (long)r)
+                << "iter=" << iter << " rank=" << r
+                << " item found at wrong rank " << found_rank;
+        }
+
+        fbtreeFree(tree);
+    }
+}
+
+/* SeekToValue must find the correct element after range
+ * deletion creates parent->prefix_len > child->prefix_len scenarios. */
+TEST_F(FbtreeTest, PropertySeekCorrectAfterRangeDelete) {
+    fbtreeFree(fbt);
+    fbt = nullptr;
+
+    const int NUM_ITERATIONS = 100;
+    unsigned int seed = 7777;
+    int key_counter = 0;
+
+    for (int iter = 0; iter < NUM_ITERATIONS; iter++) {
+        int N;
+        if (iter < 30) {
+            N = 10 + (rand_r(&seed) % 50);
+        } else if (iter < 70) {
+            N = TEST_NODE_CAPACITY + 1 + (rand_r(&seed) % 300);
+        } else {
+            N = 500 + (rand_r(&seed) % 4500);
+        }
+
+        fbtreeIndex *tree = fbtreeCreate();
+        for (int i = 0; i < N; i++) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "sk_%08d", key_counter++);
+            fbtreeInsert(tree, createString(buf));
+        }
+
+        /* Delete a random range */
+        unsigned long start_rank = rand_r(&seed) % N;
+        unsigned long end_rank = start_rank + (rand_r(&seed) % (N - start_rank));
+        fbtreeDeleteRangeByRank(tree, start_rank, end_rank, NULL, NULL);
+
+        /* Collect remaining elements */
+        std::vector<std::string> remaining;
+        {
+            fbtreeIterator it;
+            fbtreeInitIterator(&it, tree);
+            const_sds pos;
+            while (fbtreeNext(&it, &pos)) {
+                remaining.emplace_back(pos, sdslen(pos));
+            }
+        }
+
+        if (remaining.empty()) {
+            fbtreeFree(tree);
+            continue;
+        }
+
+        /* Seek to each remaining element and verify correct positioning */
+        for (size_t i = 0; i < remaining.size(); i += (remaining.size() / 20 > 0 ? remaining.size() / 20 : 1)) {
+            sds seek_val = sdsnewlen(remaining[i].data(), remaining[i].size());
+            fbtreeIterator it;
+            fbtreeInitIterator(&it, tree);
+            fbtreeSeekToValue(tree, seek_val, &it);
+            const_sds pos;
+            ASSERT_TRUE(fbtreeNext(&it, &pos))
+                << "iter=" << iter << " seek failed for element " << i;
+            ASSERT_EQ(sdscmp(pos, seek_val), 0)
+                << "iter=" << iter << " seek returned wrong element at " << i;
+            sdsfree(seek_val);
+        }
+
+        /* Also seek for a value before the first element */
+        sds before = createString("A_before_everything");
+        {
+            fbtreeIterator it;
+            fbtreeInitIterator(&it, tree);
+            fbtreeSeekToValue(tree, before, &it);
+            const_sds pos;
+            ASSERT_TRUE(fbtreeNext(&it, &pos))
+                << "iter=" << iter << " seek before first element failed";
+            /* Should return the first remaining element */
+            ASSERT_EQ(std::string(pos, sdslen(pos)), remaining[0])
+                << "iter=" << iter << " seek before first returned wrong element";
+        }
+        sdsfree(before);
+
+        fbtreeFree(tree);
+    }
+}
+
+/* ========== Edge Range Deletion Tests (start/end of tree, multilevel) ========== */
+
+/* Delete a large range from the start of a multilevel tree. Ensures inner
+ * nodes are removed, leftmost_leaf cache is updated, and merge enforcement
+ * holds after deleting from the left edge. */
+TEST_F(FbtreeTest, DeleteRangeByRankFromStartMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("edge_", "", i, 5));
+    }
+    expectValid();
+
+    /* Delete the first ~2 inner nodes worth of elements */
+    unsigned long delete_end = TEST_NODE_CAPACITY * 2;
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, 0, delete_end - 1, NULL, NULL);
+    EXPECT_EQ(deleted, delete_end);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - delete_end));
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+
+    /* Verify first remaining element */
+    const_sds first = fbtreeGetAtRank(fbt, 0);
+    ASSERT_NE(first, nullptr);
+    sds expected_first = createBase26TestString("edge_", "", delete_end, 5);
+    EXPECT_EQ(sdscmp(first, expected_first), 0);
+    sdsfree(expected_first);
+
+    /* Verify iteration */
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), (size_t)(N - delete_end));
+}
+
+/* Delete a large range from the end of a multilevel tree. */
+TEST_F(FbtreeTest, DeleteRangeByRankFromEndMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("edge_", "", i, 5));
+    }
+    expectValid();
+
+    unsigned long delete_start = N - TEST_NODE_CAPACITY * 2;
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, delete_start, N - 1, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(N - delete_start));
+    EXPECT_EQ(fbtreeLength(fbt), delete_start);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+
+    /* Verify last remaining element */
+    const_sds last = fbtreeGetAtRank(fbt, delete_start - 1);
+    ASSERT_NE(last, nullptr);
+    sds expected_last = createBase26TestString("edge_", "", delete_start - 1, 5);
+    EXPECT_EQ(sdscmp(last, expected_last), 0);
+    sdsfree(expected_last);
+
+    auto remaining = collectForward();
+    EXPECT_EQ(remaining.size(), (size_t)delete_start);
+}
+
+/* Delete from start of a 3+ level tree. */
+TEST_F(FbtreeTest, DeleteRangeByRankFromStartDeepTree) {
+    const int N = TEST_THREE_LEVEL_ITEMS;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("deep_", "", i, 6));
+    }
+    expectValid();
+
+    unsigned long delete_end = N / 3;
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, 0, delete_end - 1, NULL, NULL);
+    EXPECT_EQ(deleted, delete_end);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - delete_end));
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+}
+
+/* Delete from end of a 3+ level tree. */
+TEST_F(FbtreeTest, DeleteRangeByRankFromEndDeepTree) {
+    const int N = TEST_THREE_LEVEL_ITEMS;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("deep_", "", i, 6));
+    }
+    expectValid();
+
+    unsigned long delete_start = N - N / 3;
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, delete_start, N - 1, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(N - delete_start));
+    EXPECT_EQ(fbtreeLength(fbt), delete_start);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+}
+
+/* Delete from start by score on a multilevel tree. */
+TEST_F(FbtreeTest, DeleteRangeByScoreFromStartMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        char score[9];
+        snprintf(score, sizeof(score), "%08d", i);
+        sds s = sdsnewlen(NULL, 8 + 7);
+        memcpy(s, score, 8);
+        memcpy(s + 8, "elem", 5);
+        s[8 + 6] = '\0';
+        fbtreeInsert(fbt, s);
+    }
+    expectValid();
+
+    /* Delete elements with score < midpoint */
+    int mid = N / 2;
+    char min_score[9], max_score[9];
+    snprintf(min_score, sizeof(min_score), "%08d", 0);
+    snprintf(max_score, sizeof(max_score), "%08d", mid - 1);
+
+    unsigned long deleted = fbtreeDeleteRangeByScore(fbt, min_score, max_score, 0, 0, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)mid);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - mid));
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+}
+
+/* Delete from end by score on a multilevel tree. */
+TEST_F(FbtreeTest, DeleteRangeByScoreFromEndMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        char score[9];
+        snprintf(score, sizeof(score), "%08d", i);
+        sds s = sdsnewlen(NULL, 8 + 7);
+        memcpy(s, score, 8);
+        memcpy(s + 8, "elem", 5);
+        s[8 + 6] = '\0';
+        fbtreeInsert(fbt, s);
+    }
+    expectValid();
+
+    int mid = N / 2;
+    char min_score[9], max_score[9];
+    snprintf(min_score, sizeof(min_score), "%08d", mid);
+    snprintf(max_score, sizeof(max_score), "%08d", N - 1);
+
+    unsigned long deleted = fbtreeDeleteRangeByScore(fbt, min_score, max_score, 0, 0, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(N - mid));
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)mid);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+}
+
+/* Delete from start by value on a multilevel tree. */
+TEST_F(FbtreeTest, DeleteRangeByValueFromStartMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("val_", "", i, 5));
+    }
+    expectValid();
+
+    int mid = N / 2;
+    sds min_val = createBase26TestString("val_", "", 0, 5);
+    sds max_val = createBase26TestString("val_", "", mid - 1, 5);
+
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)mid);
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)(N - mid));
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+}
+
+/* Delete from end by value on a multilevel tree. */
+TEST_F(FbtreeTest, DeleteRangeByValueFromEndMultilevel) {
+    const int N = TEST_NODE_CAPACITY * 4;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("val_", "", i, 5));
+    }
+    expectValid();
+
+    int mid = N / 2;
+    sds min_val = createBase26TestString("val_", "", mid, 5);
+    sds max_val = createBase26TestString("val_", "", N - 1, 5);
+
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_val, max_val, 0, 0, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(N - mid));
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)mid);
+    sdsfree(min_val);
+    sdsfree(max_val);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+}
+
+/* ========== Massive Range Deletion (collapse to single leaf) ========== */
+
+/* Delete all but the first few elements from a 3+ level tree.
+ * The entire right side of the tree is freed and the root collapses
+ * down to a single leaf. */
+TEST_F(FbtreeTest, DeleteMostOfDeepTreeKeepFirst) {
+    const int N = TEST_THREE_LEVEL_ITEMS;
+    const int KEEP = 10;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("big_", "", i, 6));
+    }
+    expectValid();
+
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, KEEP, N - 1, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(N - KEEP));
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)KEEP);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+
+    /* Verify the surviving elements are the first KEEP */
+    for (int i = 0; i < KEEP; i++) {
+        sds expected = createBase26TestString("big_", "", i, 6);
+        const_sds actual = fbtreeGetAtRank(fbt, i);
+        ASSERT_NE(actual, nullptr);
+        EXPECT_EQ(sdscmp(actual, expected), 0);
+        sdsfree(expected);
+    }
+
+    /* Verify iteration works in both directions */
+    auto fwd = collectForward();
+    EXPECT_EQ(fwd.size(), (size_t)KEEP);
+    auto bwd = collectBackward();
+    EXPECT_EQ(bwd.size(), (size_t)KEEP);
+}
+
+/* Delete all but the last few elements from a 3+ level tree. */
+TEST_F(FbtreeTest, DeleteMostOfDeepTreeKeepLast) {
+    const int N = TEST_THREE_LEVEL_ITEMS;
+    const int KEEP = 10;
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("big_", "", i, 6));
+    }
+    expectValid();
+
+    unsigned long deleted = fbtreeDeleteRangeByRank(fbt, 0, N - KEEP - 1, NULL, NULL);
+    EXPECT_EQ(deleted, (unsigned long)(N - KEEP));
+    EXPECT_EQ(fbtreeLength(fbt), (unsigned long)KEEP);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+
+    for (int i = 0; i < KEEP; i++) {
+        sds expected = createBase26TestString("big_", "", N - KEEP + i, 6);
+        const_sds actual = fbtreeGetAtRank(fbt, i);
+        ASSERT_NE(actual, nullptr);
+        EXPECT_EQ(sdscmp(actual, expected), 0);
+        sdsfree(expected);
+    }
+
+    auto fwd = collectForward();
+    EXPECT_EQ(fwd.size(), (size_t)KEEP);
+    auto bwd = collectBackward();
+    EXPECT_EQ(bwd.size(), (size_t)KEEP);
+}
+
+/* Delete the middle of a 3+ level tree, leaving a few elements on each
+ * end. The surviving boundary leaves are underflowed and should merge,
+ * collapsing the tree down to a single leaf via root collapse. */
+TEST_F(FbtreeTest, DeleteMostOfDeepTreeKeepEnds) {
+    const int N = TEST_THREE_LEVEL_ITEMS;
+    const int KEEP_EACH_SIDE = 5; /* < MIN_FILL, forces merge */
+    for (int i = 0; i < N; i++) {
+        fbtreeInsert(fbt, createBase26TestString("big_", "", i, 6));
+    }
+    expectValid();
+
+    unsigned long deleted = fbtreeDeleteRangeByRank(
+        fbt, KEEP_EACH_SIDE, N - KEEP_EACH_SIDE - 1, NULL, NULL);
+    unsigned long expected_remaining = KEEP_EACH_SIDE * 2;
+    EXPECT_EQ(deleted, (unsigned long)(N - expected_remaining));
+    EXPECT_EQ(fbtreeLength(fbt), expected_remaining);
+    expectValid();
+    EXPECT_TRUE(fbtreeDebugValidateMergeEnforcement(fbt));
+
+    /* Verify first and last surviving elements */
+    sds expected_first = createBase26TestString("big_", "", 0, 6);
+    sds expected_last = createBase26TestString("big_", "", N - 1, 6);
+    const_sds actual_first = fbtreeGetAtRank(fbt, 0);
+    const_sds actual_last = fbtreeGetAtRank(fbt, expected_remaining - 1);
+    ASSERT_NE(actual_first, nullptr);
+    ASSERT_NE(actual_last, nullptr);
+    EXPECT_EQ(sdscmp(actual_first, expected_first), 0);
+    EXPECT_EQ(sdscmp(actual_last, expected_last), 0);
+    sdsfree(expected_first);
+    sdsfree(expected_last);
+
+    auto fwd = collectForward();
+    EXPECT_EQ(fwd.size(), (size_t)expected_remaining);
+    auto bwd = collectBackward();
+    EXPECT_EQ(bwd.size(), (size_t)expected_remaining);
 }

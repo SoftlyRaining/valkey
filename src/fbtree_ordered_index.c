@@ -48,9 +48,12 @@ typedef struct {
 typedef struct {
     node header;
     char embedded_prefix[EMBED_PREFIX_LEN]; /* Short prefix inline; long prefix stores char* at aligned offset */
-    size_t prefix_len;
+    size_t prefix_len;                      /* Common prefix length of this node's anchor values (NOT all subtree keys).
+                                             * Features are the 4 bytes at offset prefix_len in each anchor, so the
+                                             * prefix skips identical leading bytes to keep features discriminating.
+                                             * Note: this can exceed a child's prefix_len — see updateCommonPrefix. */
     char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
-    sds anchors[NODE_SIZE]; /* pointers to leaf high_key strings */
+    sds anchors[NODE_SIZE]; /* High keys of children (rightmost value in each child's subtree) */
     node *children[NODE_SIZE];
     size_t child_sizes[NODE_SIZE];      /* subtree element counts for rank queries */
     uint8_t child_num_items[NODE_SIZE]; /* direct item count of each child */
@@ -205,12 +208,17 @@ fbtreeIndex *fbtreeCreate(void) {
     return fbt;
 }
 
-static void freeNodeRecursive(node *n) {
+/* Callback invoked for each item being deleted, before sdsfree.
+ * Allows callers to perform side effects (e.g., hashtable removal). */
+typedef void (*fbtreeItemCallback)(sds item, void *ctx);
+
+static void freeNodeRecursive(node *n, fbtreeItemCallback callback, void *ctx) {
     if (!n) return;
 
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
         for (int i = 0; i < leaf->header.num_items; i++) {
+            if (callback) callback(leaf->values[i], ctx);
             sdsfree(leaf->values[i]);
         }
         zfree(leaf);
@@ -219,15 +227,28 @@ static void freeNodeRecursive(node *n) {
         innerNodeFreePrefix(inner);
         for (int i = 0; i < inner->header.num_items; i++) {
             if (inner->children[i] != NULL) {
-                freeNodeRecursive(inner->children[i]);
+                freeNodeRecursive(inner->children[i], callback, ctx);
             }
         }
         zfree(inner);
     }
 }
 
+/* Free all nodes and reset to empty. If callback is non-NULL, it is invoked
+ * for each item before freeing. */
+static void fbtreeDeleteAll(fbtreeIndex *fbt, fbtreeItemCallback callback, void *callback_ctx) {
+    freeNodeRecursive(fbt->root, callback, callback_ctx);
+    fbt->root = NULL;
+    fbt->leftmost_leaf = NULL;
+    fbt->rightmost_leaf = NULL;
+}
+
+void fbtreeEmpty(fbtreeIndex *fbt) {
+    fbtreeDeleteAll(fbt, NULL, NULL);
+}
+
 void fbtreeFree(fbtreeIndex *fbt) {
-    freeNodeRecursive(fbt->root);
+    fbtreeEmpty(fbt);
     zfree(fbt);
 }
 
@@ -277,8 +298,20 @@ static inline void innerNodeMoveChildren(innerNode *node, int dst_idx, int src_i
 
 static bool updateCommonPrefix(innerNode *inner) {
     if (inner->header.num_items < 2) return false;
-    // TODO: if we knew which one updated, we could optimize to avoid one of the anchor key fetches (probably)
 
+    /* Compute the common prefix of this node's first and last anchors.
+     * Anchors are high keys of children, so this is the common prefix among
+     * anchor values — NOT the common prefix of all keys in the subtree.
+     *
+     * This means prefix_len can exceed a child's prefix_len. The leftmost
+     * child's key range extends below its high key (anchor), so its own
+     * anchors may diverge earlier than the parent's anchors do. Example:
+     * parent anchors "60_100" and "60_200" share prefix "60_" (len=3), but
+     * child[0] contains keys "59_999" through "60_100", so child[0]'s
+     * anchors only share prefix "" (len=0).
+     *
+     * This is handled correctly by findChildIndex: when a lookup key is
+     * less than the prefix, it returns child index 0 (leftmost).  */
     const_sds first_anchor = inner->anchors[0];
     const_sds last_anchor = inner->anchors[inner->header.num_items - 1];
     size_t first_len = sdslen(first_anchor);
@@ -297,7 +330,6 @@ static bool updateCommonPrefix(innerNode *inner) {
     return false;
 }
 
-/* Get size of a node's subtree */
 static size_t getSubtreeSize(node *n) {
     if (n->is_leaf) {
         return n->num_items;
@@ -730,14 +762,16 @@ void featureSearchSIMD_scalar_test_wrapper(char features[FEATURE_SIZE][FEATURE_R
  * 1. SIMD pass: narrow candidates using feature comparison
  * 2. Anchor pass: binary search on anchors within narrowed range (only if needed)
  *
- * validated_len: bytes already validated by ancestors - skip comparing these.
- */
-static int findChildIndex(innerNode *inner, const_sds string, size_t validated_len) {
-    /* Only compare prefix bytes beyond what ancestors already validated */
-    if (inner->prefix_len > validated_len) {
-        size_t cmp_len = inner->prefix_len - validated_len;
+ * Compares the full prefix at each node. If the key falls outside the prefix
+ * range (less than all anchors or greater than all anchors), short-circuits
+ * to child 0 or num_items without proceeding to features/anchors. */
+static int findChildIndex(innerNode *inner, const_sds string) {
+    if (inner->prefix_len > 0) {
         const char *prefix = innerNodeGetPrefix(inner);
-        int cmp = memcmp(string + validated_len, prefix + validated_len, cmp_len);
+        size_t slen = sdslen(string);
+        size_t cmp_len = inner->prefix_len < slen ? inner->prefix_len : slen;
+        int cmp = memcmp(string, prefix, cmp_len);
+        if (cmp == 0 && slen < inner->prefix_len) cmp = -1; /* string shorter than prefix */
         if (cmp < 0) return 0;
         if (cmp > 0) return inner->header.num_items;
     }
@@ -753,8 +787,6 @@ static int findChildIndex(innerNode *inner, const_sds string, size_t validated_l
     /* Pass 1: SIMD feature search to narrow range */
     int left, right;
     featureSearchSIMD(inner->features, inner->header.num_items, target, &left, &right);
-
-    /* TODO: consider scalar path for small num_anchor_keys */
 
     /* Pass 2: Binary search on anchors within narrowed range (handles collisions) */
     while (left < right) {
@@ -797,7 +829,7 @@ static insertResult innerNodeHandleChildSplit(innerNode *parent, node *new_child
     }
 }
 
-static insertResult subtreeInsert(node *n, sds string, TraversalHint hint, size_t validated_len) {
+static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
     assert(n);
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
@@ -818,12 +850,11 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint, size_
         } else if (hint == HINT_LEFTMOST) {
             child_idx = 0;
         } else {
-            child_idx = findChildIndex(parent, string, validated_len);
+            child_idx = findChildIndex(parent, string);
             if (child_idx == parent->header.num_items) child_idx--;
         }
 
-        /* Pass this node's prefix_len to child - it's now validated */
-        insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint, parent->prefix_len);
+        insertResult child_insert_result = subtreeInsert(parent->children[child_idx], string, hint);
 
         if (child_insert_result.updated_anchor) {
             parent->anchors[child_idx] = child_insert_result.updated_anchor;
@@ -879,7 +910,7 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string) {
     }
 
     /* Insert with hint - skips inner node searches for append/prepend */
-    insertResult result = subtreeInsert(fbt->root, string, hint, 0);
+    insertResult result = subtreeInsert(fbt->root, string, hint);
 
     if (result.new_node) {
         innerNode *new_root = innerNodeCreate();
@@ -964,10 +995,11 @@ static void innerNodeMerge(innerNode *left, innerNode *right) {
 
 /* Attempt to merge the child at child_idx with a sibling in the parent.
  * Called when the child has underflowed (num_items < MIN_FILL).
- * Always merges right into left. Returns true if a merge occurred. */
-static bool tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
+ * Always merges right into left. Returns a pointer to the surviving (merged)
+ * node, or NULL if no merge was possible. */
+static node *tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
     int child_count = parent->child_num_items[child_idx];
-    if (child_count >= MIN_FILL) return false;
+    if (child_count >= MIN_FILL) return NULL;
 
     /* Pick the best sibling: prefer fewer items, check left then right */
     int best_sib = -1;
@@ -980,7 +1012,7 @@ static bool tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
             best_sib = child_idx + 1;
         }
     }
-    if (best_sib < 0) return false;
+    if (best_sib < 0) return NULL;
 
     /* Always merge right into left */
     int left_idx = (best_sib < child_idx) ? best_sib : child_idx;
@@ -1034,7 +1066,7 @@ static bool tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
         updateCommonPrefix(parent);
     }
 
-    return true;
+    return left_child;
 }
 
 static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds item) {
@@ -1071,7 +1103,7 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
         return leafNodeDelete(fbt, (leafNode *)n, item);
 
     innerNode *inner = (innerNode *)n;
-    int index = findChildIndex(inner, item, 0);
+    int index = findChildIndex(inner, item);
     if (index == inner->header.num_items) return (deleteResult){0};
 
     deleteResult child_result = subtreeDelete(fbt, inner->children[index], item);
@@ -1283,17 +1315,15 @@ long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item) {
 
     long rank = 0;
     node *current = fbt->root;
-    size_t validated_len = 0;
 
     while (!current->is_leaf) {
         innerNode *inner = (innerNode *)current;
-        int child_idx = findChildIndex(inner, item, validated_len);
+        int child_idx = findChildIndex(inner, item);
         if (child_idx >= inner->header.num_items) return -1;
 
         for (int i = 0; i < child_idx; i++) {
             rank += inner->child_sizes[i];
         }
-        validated_len = inner->prefix_len;
         current = inner->children[child_idx];
     }
 
@@ -1423,18 +1453,16 @@ void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank) {
 
 #define SCORE_SIZE sizeof(double) /* Normalized score prefix size */
 
-/* Find child index for score lookup (8-byte prefix). Optimized: no bounds checking.
- * validated_len: score bytes already matched by ancestors - skip comparing these. */
-static int findChildIndexByScore(innerNode *inner, const char *score, size_t validated_len) {
-    /* Compare unvalidated prefix bytes (up to 8) */
-    if (inner->prefix_len > validated_len) {
-        size_t cmp_len = (inner->prefix_len < SCORE_SIZE ? inner->prefix_len : SCORE_SIZE) - validated_len;
-        if (cmp_len > 0) {
-            const char *prefix = innerNodeGetPrefix(inner);
-            int cmp = memcmp(score + validated_len, prefix + validated_len, cmp_len);
-            if (cmp < 0) return 0;
-            if (cmp > 0) return inner->header.num_items;
-        }
+/* Find child index for score lookup (8-byte prefix).
+ * Compares the full prefix at each node (up to SCORE_SIZE bytes). */
+static int findChildIndexByScore(innerNode *inner, const char *score) {
+    /* Compare prefix bytes (up to 8) */
+    if (inner->prefix_len > 0) {
+        size_t cmp_len = inner->prefix_len < SCORE_SIZE ? inner->prefix_len : SCORE_SIZE;
+        const char *prefix = innerNodeGetPrefix(inner);
+        int cmp = memcmp(score, prefix, cmp_len);
+        if (cmp < 0) return 0;
+        if (cmp > 0) return inner->header.num_items;
     }
 
     /* If node prefix covers entire score, first child has first match */
@@ -1486,14 +1514,12 @@ void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iter
     if (!fbt->root) return;
 
     node *current = fbt->root;
-    size_t validated_len = 0;
 
     while (!current->is_leaf) {
         innerNode *inner = (innerNode *)current;
-        int child_idx = findChildIndexByScore(inner, score, validated_len);
+        int child_idx = findChildIndexByScore(inner, score);
         if (child_idx >= inner->header.num_items)
             child_idx = inner->header.num_items - 1;
-        validated_len = inner->prefix_len;
         current = inner->children[child_idx];
     }
 
@@ -1531,13 +1557,11 @@ void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterat
     if (!fbt->root) return;
 
     node *current = fbt->root;
-    size_t validated_len = 0;
 
     while (!current->is_leaf) {
         innerNode *inner = (innerNode *)current;
-        int child_idx = findChildIndex(inner, value, validated_len);
+        int child_idx = findChildIndex(inner, value);
         if (child_idx >= inner->header.num_items) child_idx = inner->header.num_items - 1;
-        validated_len = inner->prefix_len;
         current = inner->children[child_idx];
     }
 
@@ -1566,495 +1590,774 @@ void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterat
 /* Maximum tree depth. NODE_SIZE=61, so depth 6 handles >61^6 = ~51 billion elements. */
 #define MAX_TREE_DEPTH 16
 
-/* Core range deletion by rank. Caller must ensure:
- * - fbt->root != NULL
- * - start_rank <= end_rank
- * - end_rank < fbtreeLength(fbt)
+/* Boundary paths captured by path builders for use by deleteRangeCore and
+ * deleteRangeSameLeaf. Stack-allocated; all arrays bounded by MAX_TREE_DEPTH. */
+typedef struct {
+    /* Shared path from root to split point */
+    node *shared_path[MAX_TREE_DEPTH];
+    int shared_left_idx[MAX_TREE_DEPTH];  /* left boundary child index at each level */
+    int shared_right_idx[MAX_TREE_DEPTH]; /* right boundary child index at each level */
+    int shared_depth;                     /* number of levels in shared path */
+
+    /* Left sub-path from split point's left child down to start leaf */
+    node *left_sub_path[MAX_TREE_DEPTH];
+    int left_sub_idx[MAX_TREE_DEPTH]; /* child index at each level */
+    int left_sub_depth;
+
+    /* Right sub-path from split point's right child down to end leaf */
+    node *right_sub_path[MAX_TREE_DEPTH];
+    int right_sub_idx[MAX_TREE_DEPTH]; /* child index at each level */
+    int right_sub_depth;
+
+    /* Leaf-level boundary indices */
+    leafNode *start_leaf;
+    int start_idx; /* first index to delete in start_leaf */
+    leafNode *end_leaf;
+    int end_idx; /* last index to delete in end_leaf */
+
+} BoundaryPaths;
+
+/* Descend from an inner node to a leaf, recording the path. At each inner
+ * node level, findChild is called to determine which child to descend into.
+ * Returns the leaf node reached.
+ *
+ * When called with a compile-time-constant function pointer (e.g.,
+ * findChildByScoreWrapper), the compiler can inline both this helper and the
+ * callback at -O2, producing specialized code with no indirect calls. */
+typedef int (*findChildFn)(innerNode *inner, const void *key);
+
+static leafNode *descendSubPath(node *start,
+                                findChildFn findChild,
+                                const void *key,
+                                node *path[],
+                                int path_idx[],
+                                int *path_depth) {
+    node *current = start;
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        path[*path_depth] = current;
+        int ci = findChild(inner, key);
+        if (ci >= inner->header.num_items) ci = inner->header.num_items - 1;
+        path_idx[*path_depth] = ci;
+        (*path_depth)++;
+        current = inner->children[ci];
+    }
+    return (leafNode *)current;
+}
+
+/* Wrappers to match the findChildFn signature */
+static int findChildByScoreWrapper(innerNode *inner, const void *key) {
+    return findChildIndexByScore(inner, (const char *)key);
+}
+
+static int findChildByValueWrapper(innerNode *inner, const void *key) {
+    return findChildIndex(inner, (const_sds)key);
+}
+
+/* Comparison function for leaf-level index resolution.
+ * Returns <0, 0, or >0 like memcmp/sdscmp. */
+typedef int (*leafCmpFn)(const_sds element, const void *key);
+
+static int leafCmpByScore(const_sds element, const void *key) {
+    return memcmp(element, key, SCORE_SIZE);
+}
+
+static int leafCmpByValue(const_sds element, const void *key) {
+    return sdscmp(element, (const_sds)key);
+}
+
+/* Resolve the start index (first element to delete) in a leaf.
+ * Binary search for first element >= key, then advance past equals
+ * if the bound is exclusive. */
+static int resolveStartIdx(const leafNode *leaf, const void *key, int exclusive, leafCmpFn cmp) {
+    int lo = 0, hi = leaf->header.num_items;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (cmp(leaf->values[mid], key) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (exclusive) {
+        while (lo < leaf->header.num_items && cmp(leaf->values[lo], key) == 0) lo++;
+    }
+    return lo;
+}
+
+/* Resolve the end index (last element to delete) in a leaf.
+ * Binary search for first element >= key, then:
+ * - inclusive: advance past equals, subtract 1 (last element <= key)
+ * - exclusive: subtract 1 (last element < key) */
+static int resolveEndIdx(const leafNode *leaf, const void *key, int exclusive, leafCmpFn cmp) {
+    int lo = 0, hi = leaf->header.num_items;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (cmp(leaf->values[mid], key) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (exclusive) {
+        return lo - 1;
+    }
+    while (lo < leaf->header.num_items && cmp(leaf->values[lo], key) == 0) lo++;
+    return lo - 1;
+}
+
+/* Merge underflowed nodes after range deletion. Only walks the O(log N)
+ * affected paths, not the entire tree. Three phases:
+ * TODO: Not actually implemented (yet), currently does a full tree walk
+ *
+ * 1. Legs (bottom-up): Each sub-path is like a subtree that had its
+ *    min or max range removed. Walk each leg bottom-up, merging the
+ *    boundary child at each level if underflowed. This is equivalent
+ *    to the merge cascade in single-item deletion.
+ *
+ * 2. Crotch (split node): After leg merges, the top-of-leg nodes may
+ *    have fewer children. Check all of the split node's children for
+ *    underflow and merge as needed. If the left and right boundary
+ *    children both underflowed and merge together, the paths "zip"
+ *    together — but this is handled naturally by mergeNodeChildren.
+ *
+ * 3. Common path (bottom-up): The split node may have lost children
+ *    from crotch merges, causing it to underflow. Walk the shared
+ *    path bottom-up, merging at each level until no underflow remains.
+ *    At most one node underflows per level, same as single-item delete. */
+
+/* Check all children of an inner node for underflow and merge any that
+ * are below MIN_FILL with a sibling. */
+static void mergeNodeChildren(fbtreeIndex *fbt, innerNode *inner) {
+    if (inner->header.num_items <= 1) return;
+    for (int i = inner->header.num_items - 1; i >= 0; i--) {
+        inner->child_num_items[i] = inner->children[i]->num_items;
+        if (inner->child_num_items[i] < MIN_FILL) {
+            tryMergeChild(fbt, inner, i);
+        }
+    }
+}
+
+/* Recursively merge underflowed children top-down. */
+static void mergeUnderflowedChildren(fbtreeIndex *fbt, node *n) {
+    if (!n || n->is_leaf) return;
+    innerNode *inner = (innerNode *)n;
+    if (inner->header.num_items <= 1) return;
+
+    for (int i = inner->header.num_items - 1; i >= 0; i--) {
+        inner->child_num_items[i] = inner->children[i]->num_items;
+        if (inner->child_num_items[i] < MIN_FILL) {
+            tryMergeChild(fbt, inner, i);
+        }
+    }
+
+    for (int i = 0; i < inner->header.num_items; i++) {
+        mergeUnderflowedChildren(fbt, inner->children[i]);
+    }
+
+    /* Refresh child_num_items after recursion — child-level merges may
+     * have changed children's num_items. Re-check for underflow. */
+    for (int i = inner->header.num_items - 1; i >= 0; i--) {
+        inner->child_num_items[i] = inner->children[i]->num_items;
+        if (inner->header.num_items > 1 && inner->child_num_items[i] < MIN_FILL) {
+            tryMergeChild(fbt, inner, i);
+        }
+    }
+}
+
+/* Merge underflowed nodes after range deletion. Conceptually three phases:
+ *
+ * 1. Legs: Each sub-path had children removed from one side. The boundary
+ *    child at each level may be underflowed and needs merging with a sibling.
+ *
+ * 2. Crotch: The split node's boundary children (tops of the legs) may be
+ *    underflowed after leg merges reduced their child count.
+ *
+ * 3. Common path: Merges at the split node may reduce its child count,
+ *    causing it to underflow from its parent's perspective. This cascades
+ *    upward like single-item deletion.
+ *
+ * We implement this as a top-down recursive walk that checks all children
+ * at each level. Only nodes with underflowed children trigger merges;
+ * unaffected subtrees are visited but no work is done (just a num_items
+ * comparison per child). A subsequent bottom-up pass propagates any
+ * underflows caused by the top-down merges. */
+static void mergeAfterRangeDelete(fbtreeIndex *fbt, BoundaryPaths *bp) {
+    UNUSED(bp);
+    /* TODO: Scope the merge walk to only the affected paths (shared path +
+     * sub-paths) instead of the full tree. This would reduce the merge pass
+     * from O(N/NODE_SIZE) to O(log N) node visits. The BoundaryPaths struct
+     * already records the affected nodes, but stale indices after Phase 4
+     * child removal and cascading underflows across the leg/crotch boundary
+     * make a path-scoped implementation tricky. For million-element trees
+     * the current full-tree walk visits ~16K inner nodes with just an
+     * integer comparison per child — likely acceptable but worth revisiting
+     * if profiling shows this is a bottleneck. */
+    if (!fbt->root || fbt->root->is_leaf) return;
+    mergeUnderflowedChildren(fbt, fbt->root);
+}
+
+/* Delete a range within a single leaf. The shared_path records the path from
+ * root to the leaf's parent for inner node fixup after removal.
  * Returns the number of elements deleted. */
-static unsigned long deleteRangeByRankCore(fbtreeIndex *fbt, unsigned long start_rank, unsigned long end_rank) {
-    unsigned long delete_count = end_rank - start_rank + 1;
-    unsigned long length = fbtreeLength(fbt);
+static unsigned long deleteRangeSameLeaf(fbtreeIndex *fbt,
+                                         BoundaryPaths *bp,
+                                         fbtreeItemCallback callback,
+                                         void *callback_ctx) {
+    /* Empty range check for score/value paths where resolved indices
+     * may indicate no matching elements. Rank paths never hit this. */
+    if (bp->start_idx > bp->end_idx || bp->start_idx >= bp->start_leaf->header.num_items || bp->end_idx < 0) return 0;
 
-    /* Special case: delete everything */
-    if (start_rank == 0 && end_rank == length - 1) {
-        freeNodeRecursive(fbt->root);
-        fbt->root = NULL;
-        fbt->leftmost_leaf = NULL;
-        fbt->rightmost_leaf = NULL;
-        return delete_count;
+    leafNode *leaf = bp->start_leaf;
+    int start_idx = bp->start_idx;
+    int end_idx = bp->end_idx;
+    unsigned long deleted = (unsigned long)(end_idx - start_idx + 1);
+
+    /* Update leftmost/rightmost caches if this leaf will become empty */
+    if (start_idx == 0 && end_idx == leaf->header.num_items - 1) {
+        if (leaf == fbt->leftmost_leaf) fbt->leftmost_leaf = leaf->next;
+        if (leaf == fbt->rightmost_leaf) fbt->rightmost_leaf = leaf->prev;
     }
 
-    /* --- Phase 1: Find boundary paths --- */
-
-    /* Record the path from root to the start and end leaves.
-     * At each inner node level, store which child index the boundary falls into. */
-    node *left_path[MAX_TREE_DEPTH];
-    int left_child_idx[MAX_TREE_DEPTH];
-    int right_child_idx[MAX_TREE_DEPTH];
-    int depth = 0;
-
-    {
-        node *current = fbt->root;
-        unsigned long left_remaining = start_rank;
-        unsigned long right_remaining = end_rank;
-
-        while (!current->is_leaf) {
-            innerNode *inner = (innerNode *)current;
-            left_path[depth] = current;
-
-            /* Find left boundary child */
-            int li = 0;
-            unsigned long left_acc = 0;
-            while (li < inner->header.num_items && left_acc + inner->child_sizes[li] <= left_remaining) {
-                left_acc += inner->child_sizes[li];
-                li++;
-            }
-            left_child_idx[depth] = li;
-            left_remaining -= left_acc;
-
-            /* Find right boundary child */
-            int ri = 0;
-            unsigned long right_acc = 0;
-            while (ri < inner->header.num_items && right_acc + inner->child_sizes[ri] <= right_remaining) {
-                right_acc += inner->child_sizes[ri];
-                ri++;
-            }
-            right_child_idx[depth] = ri;
-            right_remaining -= right_acc;
-
-            depth++;
-
-            /* If both boundaries are in the same child, descend together */
-            if (li == ri) {
-                current = inner->children[li];
-            } else {
-                /* Boundaries diverge - we need to handle this level and below.
-                 * For now, descend into left child for left path, right child for right path,
-                 * and handle the middle children (fully deleted) at this level. */
-                break;
-            }
+    /* Invoke callback for items being removed */
+    if (callback) {
+        for (int i = start_idx; i <= end_idx; i++) {
+            callback(leaf->values[i], callback_ctx);
         }
+    }
 
-        if (current->is_leaf) {
-            /* Both boundaries in the same leaf */
-            leafNode *leaf = (leafNode *)current;
-            int start_idx = (int)left_remaining;
-            int end_idx = (int)right_remaining;
+    leafNodeRemoveRange(leaf, start_idx, end_idx);
 
-            /* Update leftmost/rightmost caches if this leaf will become empty */
-            if (start_idx == 0 && end_idx == leaf->header.num_items - 1) {
-                if (leaf == fbt->leftmost_leaf) fbt->leftmost_leaf = leaf->next;
-                if (leaf == fbt->rightmost_leaf) fbt->rightmost_leaf = leaf->prev;
-            }
+    /* Walk back up shared path: fix sizes and anchors */
+    for (int d = bp->shared_depth - 1; d >= 0; d--) {
+        innerNode *inner = (innerNode *)bp->shared_path[d];
+        int ci = bp->shared_left_idx[d];
+        inner->child_sizes[ci] -= deleted;
 
-            leafNodeRemoveRange(leaf, start_idx, end_idx);
-
-            /* Walk back up and fix sizes and anchors */
-            for (int d = depth - 1; d >= 0; d--) {
-                innerNode *inner = (innerNode *)left_path[d];
-                int ci = left_child_idx[d];
-                inner->child_sizes[ci] -= delete_count;
-
-                if (inner->child_sizes[ci] == 0) {
-                    node *empty = inner->children[ci];
-                    if (empty->is_leaf) unlinkLeaf((leafNode *)empty);
-                    zfree(empty);
-                    innerNodeRemoveChild(inner, ci);
-                } else {
-                    inner->child_num_items[ci] = inner->children[ci]->num_items;
-                    /* Anchor may have changed if we removed the last element */
-                    sds new_anchor = inner->children[ci]->is_leaf
-                                         ? leafNodeHighKey((leafNode *)inner->children[ci])
-                                         : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
-                    inner->anchors[ci] = new_anchor;
-                    for (int j = 0; j < FEATURE_SIZE; j++)
-                        inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
-                    if (ci == 0 || ci == inner->header.num_items - 1) updateCommonPrefix(inner);
-                }
-            }
-
-            fbtreePostDeleteCleanup(fbt);
-            return delete_count;
-        }
-
-        /* --- Phase 2: Boundaries diverged at depth-1. Process the split. --- */
-        int split_depth = depth - 1;
-        innerNode *split_node = (innerNode *)left_path[split_depth];
-        int li = left_child_idx[split_depth];
-        int ri = right_child_idx[split_depth];
-
-        /* 2a: Descend left path to find the start leaf */
-        node *left_current = split_node->children[li];
-        unsigned long lr = left_remaining;
-        int left_sub_depth = 0;
-        node *left_sub_path[MAX_TREE_DEPTH];
-        int left_sub_idx[MAX_TREE_DEPTH];
-
-        while (!left_current->is_leaf) {
-            innerNode *inner = (innerNode *)left_current;
-            left_sub_path[left_sub_depth] = left_current;
-            int ci = 0;
-            unsigned long acc = 0;
-            while (ci < inner->header.num_items && acc + inner->child_sizes[ci] <= lr) {
-                acc += inner->child_sizes[ci];
-                ci++;
-            }
-            left_sub_idx[left_sub_depth] = ci;
-            lr -= acc;
-            left_sub_depth++;
-            left_current = inner->children[ci];
-        }
-        leafNode *start_leaf = (leafNode *)left_current;
-        int start_idx = (int)lr;
-
-        /* 2b: Descend right path to find the end leaf */
-        node *right_current = split_node->children[ri];
-        unsigned long rr = right_remaining;
-        int right_sub_depth = 0;
-        node *right_sub_path[MAX_TREE_DEPTH];
-        int right_sub_idx[MAX_TREE_DEPTH];
-
-        while (!right_current->is_leaf) {
-            innerNode *inner = (innerNode *)right_current;
-            right_sub_path[right_sub_depth] = right_current;
-            int ci = 0;
-            unsigned long acc = 0;
-            while (ci < inner->header.num_items && acc + inner->child_sizes[ci] <= rr) {
-                acc += inner->child_sizes[ci];
-                ci++;
-            }
-            right_sub_idx[right_sub_depth] = ci;
-            rr -= acc;
-            right_sub_depth++;
-            right_current = inner->children[ci];
-        }
-        leafNode *end_leaf = (leafNode *)right_current;
-        int end_idx = (int)rr;
-
-        /* --- Phase 3: Splice leaf chain and trim boundary leaves --- */
-
-        /* Determine the surviving boundary leaves after trimming */
-        bool start_leaf_dies = (start_idx == 0);
-        bool end_leaf_dies = (end_idx == end_leaf->header.num_items - 1);
-
-        /* The last surviving leaf on the left side */
-        leafNode *left_survivor = start_leaf_dies ? start_leaf->prev : start_leaf;
-        /* The first surviving leaf on the right side */
-        leafNode *right_survivor = end_leaf_dies ? end_leaf->next : end_leaf;
-
-        /* Update leftmost/rightmost caches */
-        if (fbt->leftmost_leaf == start_leaf && start_leaf_dies) {
-            fbt->leftmost_leaf = right_survivor;
-        }
-        if (fbt->rightmost_leaf == end_leaf && end_leaf_dies) {
-            fbt->rightmost_leaf = left_survivor;
-        }
-
-        /* Splice the linked list: connect left_survivor <-> right_survivor.
-         * All leaves between them become unreachable from the list. */
-        if (left_survivor)
-            left_survivor->next = right_survivor;
-        if (right_survivor)
-            right_survivor->prev = left_survivor;
-
-        /* Trim boundary leaves (free deleted sds values but keep the leaf node alive).
-         * Even for leaves that will be fully freed via freeNodeRecursive, we must
-         * zero their num_items so getSubtreeSize returns correct counts during fixup. */
-        if (!start_leaf_dies) {
-            for (int i = start_idx; i < start_leaf->header.num_items; i++)
-                sdsfree(start_leaf->values[i]);
-            start_leaf->header.num_items = start_idx;
+        if (inner->child_sizes[ci] == 0) {
+            node *empty = inner->children[ci];
+            if (empty->is_leaf) unlinkLeaf((leafNode *)empty);
+            zfree(empty);
+            innerNodeRemoveChild(inner, ci);
         } else {
-            for (int i = 0; i < start_leaf->header.num_items; i++)
-                sdsfree(start_leaf->values[i]);
-            start_leaf->header.num_items = 0;
-        }
-        if (!end_leaf_dies) {
-            for (int i = 0; i <= end_idx; i++)
-                sdsfree(end_leaf->values[i]);
-            int remaining = end_leaf->header.num_items - end_idx - 1;
-            memmove(&end_leaf->values[0], &end_leaf->values[end_idx + 1], remaining * sizeof(sds));
-            end_leaf->header.num_items = remaining;
-        } else {
-            for (int i = 0; i < end_leaf->header.num_items; i++)
-                sdsfree(end_leaf->values[i]);
-            end_leaf->header.num_items = 0;
-        }
-
-        /* --- Phase 4: Fix up inner nodes bottom-to-top --- */
-
-        /* Fix left subtree: remove children to the right of the left boundary child.
-         * These subtrees are fully within the deleted range. Their leaves are already
-         * disconnected from the linked list, so freeNodeRecursive is safe. */
-        for (int d = left_sub_depth - 1; d >= 0; d--) {
-            innerNode *inner = (innerNode *)left_sub_path[d];
-            int ci = left_sub_idx[d];
-
-            for (int i = ci + 1; i < inner->header.num_items; i++) {
-                freeNodeRecursive(inner->children[i]);
-            }
-            inner->header.num_items = ci + 1;
-
-            /* Update or remove the boundary child */
-            inner->child_sizes[ci] = getSubtreeSize(inner->children[ci]);
-            if (inner->child_sizes[ci] == 0) {
-                zfree(inner->children[ci]);
-                inner->header.num_items = ci;
-            } else {
-                inner->child_num_items[ci] = inner->children[ci]->num_items;
-                sds new_anchor = inner->children[ci]->is_leaf
-                                     ? leafNodeHighKey((leafNode *)inner->children[ci])
-                                     : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
-                inner->anchors[ci] = new_anchor;
-                for (int j = 0; j < FEATURE_SIZE; j++)
-                    inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
-            }
-            updateCommonPrefix(inner);
-        }
-
-        /* Fix right subtree: remove children to the left of the right boundary child */
-        for (int d = right_sub_depth - 1; d >= 0; d--) {
-            innerNode *inner = (innerNode *)right_sub_path[d];
-            int ci = right_sub_idx[d];
-
-            for (int i = 0; i < ci; i++) {
-                freeNodeRecursive(inner->children[i]);
-            }
-            if (ci > 0) {
-                innerNodeRemoveChildrenRange(inner, 0, ci - 1);
-            }
-
-            /* Boundary child is now at index 0 (if we removed left children) */
-            int new_ci = 0;
-            inner->child_sizes[new_ci] = getSubtreeSize(inner->children[new_ci]);
-            if (inner->child_sizes[new_ci] == 0) {
-                zfree(inner->children[new_ci]);
-                innerNodeRemoveChildrenRange(inner, 0, 0);
-            } else {
-                inner->child_num_items[new_ci] = inner->children[new_ci]->num_items;
-                sds new_anchor = inner->children[new_ci]->is_leaf
-                                     ? leafNodeHighKey((leafNode *)inner->children[new_ci])
-                                     : ((innerNode *)inner->children[new_ci])->anchors[((innerNode *)inner->children[new_ci])->header.num_items - 1];
-                inner->anchors[new_ci] = new_anchor;
-                for (int j = 0; j < FEATURE_SIZE; j++)
-                    inner->features[j][new_ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
-            }
-            updateCommonPrefix(inner);
-        }
-
-        /* Fix the split node: remove fully-deleted middle children, update boundary children */
-        {
-            /* Free middle children subtrees (fully inside the range) */
-            for (int i = li + 1; i < ri; i++) {
-                freeNodeRecursive(split_node->children[i]);
-            }
-
-            /* Check if boundary subtrees are now empty */
-            size_t left_size = getSubtreeSize(split_node->children[li]);
-            size_t right_size = getSubtreeSize(split_node->children[ri]);
-
-            int remove_start = li + 1;
-            int remove_end = ri - 1;
-
-            if (left_size == 0) {
-                freeNodeRecursive(split_node->children[li]);
-                remove_start = li;
-            }
-            if (right_size == 0) {
-                freeNodeRecursive(split_node->children[ri]);
-                remove_end = ri;
-            }
-
-            if (remove_start <= remove_end) {
-                innerNodeRemoveChildrenRange(split_node, remove_start, remove_end);
-            }
-
-            /* Rebuild anchors/features for all surviving children */
-            for (int i = 0; i < split_node->header.num_items; i++) {
-                split_node->child_sizes[i] = getSubtreeSize(split_node->children[i]);
-                split_node->child_num_items[i] = split_node->children[i]->num_items;
-                sds anchor = split_node->children[i]->is_leaf
-                                 ? leafNodeHighKey((leafNode *)split_node->children[i])
-                                 : ((innerNode *)split_node->children[i])->anchors[((innerNode *)split_node->children[i])->header.num_items - 1];
-                split_node->anchors[i] = anchor;
-                for (int j = 0; j < FEATURE_SIZE; j++)
-                    split_node->features[j][i] = getFeatureByte(anchor, split_node->prefix_len, j);
-            }
-            updateCommonPrefix(split_node);
-        }
-
-        /* Fix ancestors above the split node */
-        for (int d = split_depth - 1; d >= 0; d--) {
-            innerNode *inner = (innerNode *)left_path[d];
-            int ci = left_child_idx[d];
-            inner->child_sizes[ci] = getSubtreeSize(inner->children[ci]);
-
-            if (inner->child_sizes[ci] == 0) {
-                zfree(inner->children[ci]);
-                innerNodeRemoveChild(inner, ci);
-            } else {
-                inner->child_num_items[ci] = inner->children[ci]->num_items;
-                sds new_anchor = inner->children[ci]->is_leaf
-                                     ? leafNodeHighKey((leafNode *)inner->children[ci])
-                                     : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
-                inner->anchors[ci] = new_anchor;
-                for (int j = 0; j < FEATURE_SIZE; j++)
-                    inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
-                if (ci == 0 || ci == inner->header.num_items - 1) updateCommonPrefix(inner);
-            }
-        }
-
-        /* --- Phase 5: Post-fixup merge pass for underflowed boundary nodes --- */
-
-        /* Left sub-path (bottom-up): boundary child is at left_sub_idx[d] */
-        for (int d = left_sub_depth - 1; d >= 0; d--) {
-            innerNode *inner = (innerNode *)left_sub_path[d];
-            if (inner->header.num_items <= 1) continue;
-            int ci = left_sub_idx[d];
-            /* After Phase 4, children to the right of ci were removed, so ci
-             * may now be beyond the valid range if the boundary child was freed. */
-            if (ci >= inner->header.num_items) continue;
-            if (inner->child_num_items[ci] < MIN_FILL) {
-                tryMergeChild(fbt, inner, ci);
-            }
-        }
-
-        /* Right sub-path (bottom-up): after Phase 4 fixup, left children were
-         * removed so the boundary child is now at index 0. */
-        for (int d = right_sub_depth - 1; d >= 0; d--) {
-            innerNode *inner = (innerNode *)right_sub_path[d];
-            if (inner->header.num_items <= 1) continue;
-            if (inner->child_num_items[0] < MIN_FILL) {
-                tryMergeChild(fbt, inner, 0);
-            }
-        }
-
-        /* Split node: check each surviving child for underflow.
-         * Walk backwards so index shifts from merges don't skip children. */
-        if (split_node->header.num_items > 1) {
-            for (int i = split_node->header.num_items - 1; i >= 0; i--) {
-                if (split_node->child_num_items[i] < MIN_FILL) {
-                    tryMergeChild(fbt, split_node, i);
-                }
-            }
-        }
-
-        /* Ancestors above the split node (bottom-up): update child_num_items
-         * (may have changed due to merges below) and check for underflow. */
-        for (int d = split_depth - 1; d >= 0; d--) {
-            innerNode *inner = (innerNode *)left_path[d];
-            if (inner->header.num_items <= 1) continue;
-            int ci = left_child_idx[d];
-            /* The child may have been removed during Phase 4 ancestor fixup
-             * if its subtree became empty. */
-            if (ci >= inner->header.num_items) continue;
-            /* Refresh child_num_items since merges below may have changed it */
             inner->child_num_items[ci] = inner->children[ci]->num_items;
-            if (inner->child_num_items[ci] < MIN_FILL) {
-                tryMergeChild(fbt, inner, ci);
-            }
+            sds new_anchor = inner->children[ci]->is_leaf
+                                 ? leafNodeHighKey((leafNode *)inner->children[ci])
+                                 : ((innerNode *)inner->children[ci])
+                                       ->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
+            inner->anchors[ci] = new_anchor;
+            for (int j = 0; j < FEATURE_SIZE; j++)
+                inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
+            if (ci == 0 || ci == inner->header.num_items - 1) updateCommonPrefix(inner);
         }
     }
+
+    /* Merge pass */
+    mergeAfterRangeDelete(fbt, bp);
 
     fbtreePostDeleteCleanup(fbt);
-    return delete_count;
+    return deleted;
+}
+
+/* Core range deletion engine for the diverged-path case (boundaries in
+ * different leaves). Splices the leaf chain, trims boundary leaves, fixes
+ * up inner nodes bottom-to-top, and runs a merge pass.
+ * If callback is non-NULL, it is invoked for each deleted item before sdsfree.
+ * Returns the number of elements deleted. */
+static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtreeItemCallback callback, void *callback_ctx) {
+    /* Empty range check: score/value path builders can produce boundary
+     * indices that fall outside the leaf (no matching elements in that leaf).
+     * Rank paths never hit this since ranks are pre-validated. */
+    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->end_idx < 0) return 0;
+    if (bp->start_idx >= bp->start_leaf->header.num_items && bp->start_leaf->next == bp->end_leaf && bp->end_idx < 0)
+        return 0;
+    if (bp->end_idx < 0 && bp->start_leaf == bp->end_leaf) return 0;
+
+    /* --- Phase 1: Boundaries diverged. Process the split. --- */
+    int split_depth = bp->shared_depth - 1;
+    innerNode *split_node = (innerNode *)bp->shared_path[split_depth];
+    int li = bp->shared_left_idx[split_depth];
+    int ri = bp->shared_right_idx[split_depth];
+
+    leafNode *start_leaf = bp->start_leaf;
+    int start_idx = bp->start_idx;
+    leafNode *end_leaf = bp->end_leaf;
+    int end_idx = bp->end_idx;
+
+    /* --- Phase 2: Splice leaf chain and trim boundary leaves --- */
+
+    /* For score/value-based paths, the boundary indices might be out of range:
+     * - start_idx >= start_leaf->num_items: no matching elements in start leaf
+     * - end_idx < 0: no matching elements in end leaf
+     * In these cases, the boundary leaf is not trimmed at all. */
+    bool start_leaf_untouched = (start_idx >= start_leaf->header.num_items);
+    bool end_leaf_untouched = (end_idx < 0);
+
+    /* Determine the surviving boundary leaves after trimming */
+    bool start_leaf_dies = !start_leaf_untouched && (start_idx == 0);
+    bool end_leaf_dies = !end_leaf_untouched && (end_idx == end_leaf->header.num_items - 1);
+
+    /* The last surviving leaf on the left side */
+    leafNode *left_survivor = start_leaf_dies ? start_leaf->prev : start_leaf;
+    /* The first surviving leaf on the right side */
+    leafNode *right_survivor = end_leaf_dies ? end_leaf->next : end_leaf;
+
+    /* Update leftmost/rightmost caches */
+    if (fbt->leftmost_leaf == start_leaf && start_leaf_dies) {
+        fbt->leftmost_leaf = right_survivor;
+    }
+    if (fbt->rightmost_leaf == end_leaf && end_leaf_dies) {
+        fbt->rightmost_leaf = left_survivor;
+    }
+
+    /* Splice the linked list: connect left_survivor <-> right_survivor.
+     * All leaves between them become unreachable from the list. */
+    if (left_survivor)
+        left_survivor->next = right_survivor;
+    if (right_survivor)
+        right_survivor->prev = left_survivor;
+
+    /* Count deleted elements during splice */
+    unsigned long deleted = 0;
+
+    /* Trim boundary leaves (free deleted sds values but keep the leaf node alive).
+     * Even for leaves that will be fully freed via freeNodeRecursive, we must
+     * zero their num_items so getSubtreeSize returns correct counts during fixup.
+     * Skip trimming entirely for untouched boundary leaves (score/value edge case). */
+    if (start_leaf_untouched) {
+        /* No elements to delete in start leaf — leave it completely untouched */
+    } else if (!start_leaf_dies) {
+        for (int i = start_idx; i < start_leaf->header.num_items; i++) {
+            if (callback) callback(start_leaf->values[i], callback_ctx);
+            sdsfree(start_leaf->values[i]);
+            deleted++;
+        }
+        start_leaf->header.num_items = start_idx;
+    } else {
+        for (int i = 0; i < start_leaf->header.num_items; i++) {
+            if (callback) callback(start_leaf->values[i], callback_ctx);
+            sdsfree(start_leaf->values[i]);
+            deleted++;
+        }
+        start_leaf->header.num_items = 0;
+    }
+    if (end_leaf_untouched) {
+        /* No elements to delete in end leaf — leave it completely untouched */
+    } else if (!end_leaf_dies) {
+        for (int i = 0; i <= end_idx; i++) {
+            if (callback) callback(end_leaf->values[i], callback_ctx);
+            sdsfree(end_leaf->values[i]);
+            deleted++;
+        }
+        int remaining = end_leaf->header.num_items - end_idx - 1;
+        memmove(&end_leaf->values[0], &end_leaf->values[end_idx + 1], remaining * sizeof(sds));
+        end_leaf->header.num_items = remaining;
+    } else {
+        for (int i = 0; i < end_leaf->header.num_items; i++) {
+            if (callback) callback(end_leaf->values[i], callback_ctx);
+            sdsfree(end_leaf->values[i]);
+            deleted++;
+        }
+        end_leaf->header.num_items = 0;
+    }
+
+    /* --- Phase 3: Fix up inner nodes bottom-to-top --- */
+
+    /* Fix left subtree: remove children to the right of the left boundary child.
+     * These subtrees are fully within the deleted range. Their leaves are already
+     * disconnected from the linked list, so freeNodeRecursive is safe. */
+    for (int d = bp->left_sub_depth - 1; d >= 0; d--) {
+        innerNode *inner = (innerNode *)bp->left_sub_path[d];
+        int ci = bp->left_sub_idx[d];
+
+        for (int i = ci + 1; i < inner->header.num_items; i++) {
+            deleted += getSubtreeSize(inner->children[i]);
+            freeNodeRecursive(inner->children[i], callback, callback_ctx);
+        }
+        inner->header.num_items = ci + 1;
+
+        /* Update or remove the boundary child */
+        inner->child_sizes[ci] = getSubtreeSize(inner->children[ci]);
+        if (inner->child_sizes[ci] == 0) {
+            zfree(inner->children[ci]);
+            inner->header.num_items = ci;
+        } else {
+            inner->child_num_items[ci] = inner->children[ci]->num_items;
+            sds new_anchor = inner->children[ci]->is_leaf
+                                 ? leafNodeHighKey((leafNode *)inner->children[ci])
+                                 : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
+            inner->anchors[ci] = new_anchor;
+            for (int j = 0; j < FEATURE_SIZE; j++)
+                inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
+        }
+        updateCommonPrefix(inner);
+    }
+
+    /* Fix right subtree: remove children to the left of the right boundary child */
+    for (int d = bp->right_sub_depth - 1; d >= 0; d--) {
+        innerNode *inner = (innerNode *)bp->right_sub_path[d];
+        int ci = bp->right_sub_idx[d];
+
+        for (int i = 0; i < ci; i++) {
+            deleted += getSubtreeSize(inner->children[i]);
+            freeNodeRecursive(inner->children[i], callback, callback_ctx);
+        }
+        if (ci > 0) {
+            innerNodeRemoveChildrenRange(inner, 0, ci - 1);
+        }
+
+        /* Boundary child is now at index 0 (if we removed left children) */
+        int new_ci = 0;
+        inner->child_sizes[new_ci] = getSubtreeSize(inner->children[new_ci]);
+        if (inner->child_sizes[new_ci] == 0) {
+            zfree(inner->children[new_ci]);
+            innerNodeRemoveChildrenRange(inner, 0, 0);
+        } else {
+            inner->child_num_items[new_ci] = inner->children[new_ci]->num_items;
+            sds new_anchor = inner->children[new_ci]->is_leaf
+                                 ? leafNodeHighKey((leafNode *)inner->children[new_ci])
+                                 : ((innerNode *)inner->children[new_ci])->anchors[((innerNode *)inner->children[new_ci])->header.num_items - 1];
+            inner->anchors[new_ci] = new_anchor;
+            for (int j = 0; j < FEATURE_SIZE; j++)
+                inner->features[j][new_ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
+        }
+        updateCommonPrefix(inner);
+    }
+
+    /* Fix the split node: remove fully-deleted middle children, update boundary children */
+    {
+        /* Free middle children subtrees (fully inside the range) */
+        for (int i = li + 1; i < ri; i++) {
+            deleted += getSubtreeSize(split_node->children[i]);
+            freeNodeRecursive(split_node->children[i], callback, callback_ctx);
+        }
+
+        /* Check if boundary subtrees are now empty */
+        size_t left_size = getSubtreeSize(split_node->children[li]);
+        size_t right_size = getSubtreeSize(split_node->children[ri]);
+
+        int remove_start = li + 1;
+        int remove_end = ri - 1;
+
+        if (left_size == 0) {
+            freeNodeRecursive(split_node->children[li], callback, callback_ctx);
+            remove_start = li;
+        }
+        if (right_size == 0) {
+            freeNodeRecursive(split_node->children[ri], callback, callback_ctx);
+            remove_end = ri;
+        }
+
+        if (remove_start <= remove_end) {
+            innerNodeRemoveChildrenRange(split_node, remove_start, remove_end);
+        }
+
+        /* Rebuild anchors/features for all surviving children */
+        for (int i = 0; i < split_node->header.num_items; i++) {
+            split_node->child_sizes[i] = getSubtreeSize(split_node->children[i]);
+            split_node->child_num_items[i] = split_node->children[i]->num_items;
+            sds anchor = split_node->children[i]->is_leaf
+                             ? leafNodeHighKey((leafNode *)split_node->children[i])
+                             : ((innerNode *)split_node->children[i])->anchors[((innerNode *)split_node->children[i])->header.num_items - 1];
+            split_node->anchors[i] = anchor;
+            for (int j = 0; j < FEATURE_SIZE; j++)
+                split_node->features[j][i] = getFeatureByte(anchor, split_node->prefix_len, j);
+        }
+        updateCommonPrefix(split_node);
+    }
+
+    /* Fix ancestors above the split node */
+    for (int d = split_depth - 1; d >= 0; d--) {
+        innerNode *inner = (innerNode *)bp->shared_path[d];
+        int ci = bp->shared_left_idx[d];
+        inner->child_sizes[ci] = getSubtreeSize(inner->children[ci]);
+
+        if (inner->child_sizes[ci] == 0) {
+            zfree(inner->children[ci]);
+            innerNodeRemoveChild(inner, ci);
+        } else {
+            inner->child_num_items[ci] = inner->children[ci]->num_items;
+            sds new_anchor = inner->children[ci]->is_leaf
+                                 ? leafNodeHighKey((leafNode *)inner->children[ci])
+                                 : ((innerNode *)inner->children[ci])->anchors[((innerNode *)inner->children[ci])->header.num_items - 1];
+            inner->anchors[ci] = new_anchor;
+            for (int j = 0; j < FEATURE_SIZE; j++)
+                inner->features[j][ci] = getFeatureByte(new_anchor, inner->prefix_len, j);
+            if (ci == 0 || ci == inner->header.num_items - 1) updateCommonPrefix(inner);
+        }
+    }
+
+    /* --- Phase 4: Post-fixup merge pass for underflowed boundary nodes --- */
+
+    /* Merge pass */
+    mergeAfterRangeDelete(fbt, bp);
+
+    fbtreePostDeleteCleanup(fbt);
+
+    return deleted;
 }
 
 /* Delete elements at ranks [start_rank, end_rank] (0-indexed, inclusive).
+ * If callback is non-NULL, it is invoked for each deleted item before sdsfree.
  * Returns the number of elements deleted. */
-unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt, unsigned long start_rank, unsigned long end_rank) {
+unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt,
+                                      unsigned long start_rank,
+                                      unsigned long end_rank,
+                                      void (*callback)(sds item, void *ctx),
+                                      void *callback_ctx) {
     if (!fbt->root) return 0;
 
     unsigned long length = fbtreeLength(fbt);
     if (start_rank >= length) return 0;
     if (end_rank >= length) end_rank = length - 1;
     if (start_rank > end_rank) return 0;
+    if (start_rank == 0 && end_rank == length - 1) {
+        fbtreeDeleteAll(fbt, callback, callback_ctx);
+        return length;
+    }
 
-    return deleteRangeByRankCore(fbt, start_rank, end_rank);
+    /* Build boundary paths by descending the tree using child_sizes accumulation */
+    BoundaryPaths bp;
+    memset(&bp, 0, sizeof(bp));
+
+    node *current = fbt->root;
+    unsigned long left_remaining = start_rank;
+    unsigned long right_remaining = end_rank;
+    int depth = 0;
+
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        bp.shared_path[depth] = current;
+
+        int li = 0;
+        unsigned long left_acc = 0;
+        while (li < inner->header.num_items && left_acc + inner->child_sizes[li] <= left_remaining) {
+            left_acc += inner->child_sizes[li];
+            li++;
+        }
+        bp.shared_left_idx[depth] = li;
+        left_remaining -= left_acc;
+
+        int ri = 0;
+        unsigned long right_acc = 0;
+        while (ri < inner->header.num_items && right_acc + inner->child_sizes[ri] <= right_remaining) {
+            right_acc += inner->child_sizes[ri];
+            ri++;
+        }
+        bp.shared_right_idx[depth] = ri;
+        right_remaining -= right_acc;
+
+        depth++;
+
+        if (li == ri) {
+            current = inner->children[li];
+        } else {
+            bp.shared_depth = depth;
+
+            /* Descend left sub-path */
+            node *left_current = inner->children[li];
+            while (!left_current->is_leaf) {
+                innerNode *left_inner = (innerNode *)left_current;
+                bp.left_sub_path[bp.left_sub_depth] = left_current;
+                int ci = 0;
+                unsigned long acc = 0;
+                while (ci < left_inner->header.num_items && acc + left_inner->child_sizes[ci] <= left_remaining) {
+                    acc += left_inner->child_sizes[ci];
+                    ci++;
+                }
+                bp.left_sub_idx[bp.left_sub_depth] = ci;
+                left_remaining -= acc;
+                bp.left_sub_depth++;
+                left_current = left_inner->children[ci];
+            }
+            bp.start_leaf = (leafNode *)left_current;
+            bp.start_idx = (int)left_remaining;
+
+            /* Descend right sub-path */
+            node *right_current = inner->children[ri];
+            while (!right_current->is_leaf) {
+                innerNode *right_inner = (innerNode *)right_current;
+                bp.right_sub_path[bp.right_sub_depth] = right_current;
+                int ci = 0;
+                unsigned long acc = 0;
+                while (ci < right_inner->header.num_items && acc + right_inner->child_sizes[ci] <= right_remaining) {
+                    acc += right_inner->child_sizes[ci];
+                    ci++;
+                }
+                bp.right_sub_idx[bp.right_sub_depth] = ci;
+                right_remaining -= acc;
+                bp.right_sub_depth++;
+                right_current = right_inner->children[ci];
+            }
+            bp.end_leaf = (leafNode *)right_current;
+            bp.end_idx = (int)right_remaining;
+
+            return deleteRangeCore(fbt, &bp, callback, callback_ctx);
+        }
+    }
+
+    /* Both boundaries in the same leaf */
+    bp.shared_depth = depth;
+    bp.start_leaf = (leafNode *)current;
+    bp.end_leaf = (leafNode *)current;
+    bp.start_idx = (int)left_remaining;
+    bp.end_idx = (int)right_remaining;
+    return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
 }
 
 /* Delete elements with score prefix in [min_score, max_score].
  * min_ex/max_ex: if true, the corresponding bound is exclusive.
  * Score is an 8-byte big-endian normalized prefix (as stored in the tree).
+ * If callback is non-NULL, it is invoked for each deleted item before sdsfree.
  * Returns the number of elements deleted. */
 unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt,
                                        const char *min_score,
                                        const char *max_score,
                                        int min_ex,
-                                       int max_ex) {
+                                       int max_ex,
+                                       void (*callback)(sds item, void *ctx),
+                                       void *callback_ctx) {
     if (!fbt->root) return 0;
 
-    /* Naive: collect matching items via iteration, then delete one by one */
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, min_score, &it);
+    /* Delete-all short-circuit */
+    sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    int min_covers = min_ex ? memcmp(min_score, first, SCORE_SIZE) < 0 : memcmp(min_score, first, SCORE_SIZE) <= 0;
+    int max_covers = max_ex ? memcmp(max_score, last, SCORE_SIZE) > 0 : memcmp(max_score, last, SCORE_SIZE) >= 0;
+    if (min_covers && max_covers) {
+        unsigned long count = fbtreeLength(fbt);
+        fbtreeDeleteAll(fbt, callback, callback_ctx);
+        return count;
+    }
 
-    size_t capacity = 64;
-    sds *to_delete = zmalloc(capacity * sizeof(sds));
-    unsigned long count = 0;
+    /* Quick check: empty range */
+    int range_cmp = memcmp(min_score, max_score, SCORE_SIZE);
+    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
 
-    const_sds pos;
-    while (fbtreeNext(&it, &pos)) {
-        int cmp_min = memcmp(pos, min_score, SCORE_SIZE);
-        if (min_ex && cmp_min == 0) continue;
+    /* Build boundary paths by descending the tree using score prefix comparison */
+    BoundaryPaths bp;
+    memset(&bp, 0, sizeof(bp));
 
-        int cmp_max = memcmp(pos, max_score, SCORE_SIZE);
-        if (max_ex ? cmp_max >= 0 : cmp_max > 0) break;
+    node *current = fbt->root;
+    int depth = 0;
 
-        if (count == capacity) {
-            capacity *= 2;
-            to_delete = zrealloc(to_delete, capacity * sizeof(sds));
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        bp.shared_path[depth] = current;
+
+        int li = findChildIndexByScore(inner, min_score);
+        if (li >= inner->header.num_items) li = inner->header.num_items - 1;
+        int ri = findChildIndexByScore(inner, max_score);
+        if (ri >= inner->header.num_items) ri = inner->header.num_items - 1;
+
+        bp.shared_left_idx[depth] = li;
+        bp.shared_right_idx[depth] = ri;
+        depth++;
+
+        if (li == ri) {
+            current = inner->children[li];
+        } else {
+            bp.shared_depth = depth;
+
+            /* Descend left sub-path */
+            bp.start_leaf = descendSubPath(
+                inner->children[li], findChildByScoreWrapper, min_score,
+                bp.left_sub_path, bp.left_sub_idx, &bp.left_sub_depth);
+            bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
+
+            /* Descend right sub-path */
+            bp.end_leaf = descendSubPath(
+                inner->children[ri], findChildByScoreWrapper, max_score,
+                bp.right_sub_path, bp.right_sub_idx, &bp.right_sub_depth);
+            bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
+
+            return deleteRangeCore(fbt, &bp, callback, callback_ctx);
         }
-        to_delete[count++] = (sds)pos;
     }
 
-    for (unsigned long i = 0; i < count; i++) {
-        fbtreeDelete(fbt, to_delete[i]);
-    }
-
-    zfree(to_delete);
-    return count;
+    /* Both boundaries in the same leaf */
+    bp.shared_depth = depth;
+    bp.start_leaf = (leafNode *)current;
+    bp.end_leaf = (leafNode *)current;
+    bp.start_idx = resolveStartIdx(bp.start_leaf, min_score, min_ex, leafCmpByScore);
+    bp.end_idx = resolveEndIdx(bp.end_leaf, max_score, max_ex, leafCmpByScore);
+    return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
 }
 
 /* Delete elements with value in [min_val, max_val] using full sds comparison.
  * min_ex/max_ex: if true, the corresponding bound is exclusive.
+ * If callback is non-NULL, it is invoked for each deleted item before sdsfree.
  * Returns the number of elements deleted. */
 unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt,
                                        const_sds min_val,
                                        const_sds max_val,
                                        int min_ex,
-                                       int max_ex) {
+                                       int max_ex,
+                                       void (*callback)(sds item, void *ctx),
+                                       void *callback_ctx) {
     if (!fbt->root) return 0;
 
-    fbtreeIterator it;
-    fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, min_val, &it);
+    /* Delete-all short-circuit */
+    sds first = leafNodeLowKey(fbt->leftmost_leaf);
+    sds last = leafNodeHighKey(fbt->rightmost_leaf);
+    int min_covers = min_ex ? sdscmp(min_val, first) < 0 : sdscmp(min_val, first) <= 0;
+    int max_covers = max_ex ? sdscmp(max_val, last) > 0 : sdscmp(max_val, last) >= 0;
+    if (min_covers && max_covers) {
+        unsigned long count = fbtreeLength(fbt);
+        fbtreeDeleteAll(fbt, callback, callback_ctx);
+        return count;
+    }
 
-    size_t capacity = 64;
-    sds *to_delete = zmalloc(capacity * sizeof(sds));
-    unsigned long count = 0;
+    /* Quick check: empty range */
+    int range_cmp = sdscmp(min_val, max_val);
+    if (range_cmp > 0 || (range_cmp == 0 && (min_ex || max_ex))) return 0;
 
-    const_sds pos;
-    while (fbtreeNext(&it, &pos)) {
-        int cmp_min = sdscmp(pos, min_val);
-        if (min_ex && cmp_min == 0) continue;
+    /* Build boundary paths by descending the tree using full sds comparison */
+    BoundaryPaths bp;
+    memset(&bp, 0, sizeof(bp));
 
-        int cmp_max = sdscmp(pos, max_val);
-        if (max_ex ? cmp_max >= 0 : cmp_max > 0) break;
+    node *current = fbt->root;
+    int depth = 0;
 
-        if (count == capacity) {
-            capacity *= 2;
-            to_delete = zrealloc(to_delete, capacity * sizeof(sds));
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        bp.shared_path[depth] = current;
+
+        int li = findChildIndex(inner, min_val);
+        if (li >= inner->header.num_items) li = inner->header.num_items - 1;
+        int ri = findChildIndex(inner, max_val);
+        if (ri >= inner->header.num_items) ri = inner->header.num_items - 1;
+
+        bp.shared_left_idx[depth] = li;
+        bp.shared_right_idx[depth] = ri;
+        depth++;
+
+        if (li == ri) {
+            current = inner->children[li];
+        } else {
+            bp.shared_depth = depth;
+
+            /* Descend left sub-path */
+            bp.start_leaf = descendSubPath(
+                inner->children[li], findChildByValueWrapper, min_val,
+                bp.left_sub_path, bp.left_sub_idx, &bp.left_sub_depth);
+            bp.start_idx = resolveStartIdx(bp.start_leaf, min_val, min_ex, leafCmpByValue);
+
+            /* Descend right sub-path */
+            bp.end_leaf = descendSubPath(
+                inner->children[ri], findChildByValueWrapper, max_val,
+                bp.right_sub_path, bp.right_sub_idx, &bp.right_sub_depth);
+            bp.end_idx = resolveEndIdx(bp.end_leaf, max_val, max_ex, leafCmpByValue);
+
+            return deleteRangeCore(fbt, &bp, callback, callback_ctx);
         }
-        to_delete[count++] = (sds)pos;
     }
 
-    for (unsigned long i = 0; i < count; i++) {
-        fbtreeDelete(fbt, to_delete[i]);
-    }
-
-    zfree(to_delete);
-    return count;
+    /* Both boundaries in the same leaf */
+    bp.shared_depth = depth;
+    bp.start_leaf = (leafNode *)current;
+    bp.end_leaf = (leafNode *)current;
+    bp.start_idx = resolveStartIdx(bp.start_leaf, min_val, min_ex, leafCmpByValue);
+    bp.end_idx = resolveEndIdx(bp.end_leaf, max_val, max_ex, leafCmpByValue);
+    return deleteRangeSameLeaf(fbt, &bp, callback, callback_ctx);
 }
 
 /* ========== Debug Functions ========== */
@@ -2082,7 +2385,7 @@ static void printIndent(int depth) {
     for (int j = 0; j < depth; j++) printf("│  ");
 }
 
-static validateResult validateNode(node *n, int depth, size_t parent_prefix_len, bool verbose);
+static validateResult validateNode(node *n, int depth, bool verbose);
 
 static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
     size_t count = leaf->header.num_items;
@@ -2107,8 +2410,8 @@ static validateResult validateLeaf(leafNode *leaf, int depth, bool verbose) {
     return (validateResult){.valid = valid, .size = count, .leftmost_leaf = leaf, .rightmost_leaf = leaf};
 }
 
-static validateResult validateInner(innerNode *inner, int depth, size_t parent_prefix_len, bool verbose) {
-    bool valid = inner->prefix_len >= parent_prefix_len;
+static validateResult validateInner(innerNode *inner, int depth, bool verbose) {
+    bool valid = true;
     size_t total_size = 0;
     leafNode *leftmost = NULL;
     leafNode *rightmost = NULL;
@@ -2144,7 +2447,7 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
             printBinaryString(anchor);
         }
 
-        validateResult child_result = validateNode(child, depth + 1, inner->prefix_len, verbose);
+        validateResult child_result = validateNode(child, depth + 1, verbose);
 
         /* Track leftmost/rightmost leaves */
         if (i == 0) leftmost = child_result.leftmost_leaf;
@@ -2173,13 +2476,13 @@ static validateResult validateInner(innerNode *inner, int depth, size_t parent_p
     return (validateResult){.valid = valid, .size = total_size, .leftmost_leaf = leftmost, .rightmost_leaf = rightmost};
 }
 
-static validateResult validateNode(node *n, int depth, size_t parent_prefix_len, bool verbose) {
+static validateResult validateNode(node *n, int depth, bool verbose) {
     if (!n) return (validateResult){.valid = true, .size = 0};
 
     if (n->is_leaf) {
         return validateLeaf((leafNode *)n, depth, verbose);
     } else {
-        return validateInner((innerNode *)n, depth, parent_prefix_len, verbose);
+        return validateInner((innerNode *)n, depth, verbose);
     }
 }
 
@@ -2195,7 +2498,7 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
         return true;
     }
 
-    validateResult result = validateNode(fbt->root, 0, 0, verbose);
+    validateResult result = validateNode(fbt->root, 0, verbose);
 
     /* Also verify total size matches computed length */
     bool length_ok = (result.size == length);

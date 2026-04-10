@@ -20,6 +20,7 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string);
 bool fbtreeDelete(fbtreeIndex *fbt, const_sds key);
 sds fbtreePopMin(fbtreeIndex *fbt);
 sds fbtreePopMax(fbtreeIndex *fbt);
+void fbtreeEmpty(fbtreeIndex *fbt);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);
 void fbtreeInitIterator(fbtreeIterator *iterator, fbtreeIndex *fbt);
@@ -42,10 +43,13 @@ void fbtreeSeekToScore(fbtreeIndex *fbt, const char *score, fbtreeIterator *iter
  * If all elements have value < given value, iterator is positioned past end. */
 void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterator);
 
+/* Optional callback invoked for each item being deleted, before sdsfree.
+ * Pass NULL for callback/callback_ctx to skip. */
+
 /* Range deletion */
-unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt, unsigned long start_rank, unsigned long end_rank);
-unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt, const char *min_score, const char *max_score, int min_ex, int max_ex);
-unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt, const_sds min_val, const_sds max_val, int min_ex, int max_ex);
+unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt, unsigned long start_rank, unsigned long end_rank, void (*callback)(sds item, void *ctx), void *callback_ctx);
+unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt, const char *min_score, const char *max_score, int min_ex, int max_ex, void (*callback)(sds item, void *ctx), void *callback_ctx);
+unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt, const_sds min_val, const_sds max_val, int min_ex, int max_ex, void (*callback)(sds item, void *ctx), void *callback_ctx);
 
 /* Debug functions */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);

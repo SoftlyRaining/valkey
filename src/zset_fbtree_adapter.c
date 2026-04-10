@@ -131,11 +131,11 @@ static void zsetFbtreeFreeItem(OrderedIndexItem *item) {
 static unsigned long zsetFbtreeDeleteRangeByScore(OrderedIndex *idx, double min, double max, int min_ex, int max_ex) {
     uint64_t min_sortable = scoreToSortable(min);
     uint64_t max_sortable = scoreToSortable(max);
-    return fbtreeDeleteRangeByScore((fbtreeIndex *)idx, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex);
+    return fbtreeDeleteRangeByScore((fbtreeIndex *)idx, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex, NULL, NULL);
 }
 
 static unsigned long zsetFbtreeDeleteRangeByRank(OrderedIndex *idx, unsigned long start, unsigned long end) {
-    return fbtreeDeleteRangeByRank((fbtreeIndex *)idx, start, end);
+    return fbtreeDeleteRangeByRank((fbtreeIndex *)idx, start, end, NULL, NULL);
 }
 
 static unsigned long zsetFbtreeLength(OrderedIndex *idx) {
