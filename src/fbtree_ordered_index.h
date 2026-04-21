@@ -51,8 +51,4 @@ unsigned long fbtreeDeleteRangeByRank(fbtreeIndex *fbt, unsigned long start_rank
 unsigned long fbtreeDeleteRangeByScore(fbtreeIndex *fbt, const char *min_score, const char *max_score, int min_ex, int max_ex, void (*callback)(sds item, void *ctx), void *callback_ctx);
 unsigned long fbtreeDeleteRangeByValue(fbtreeIndex *fbt, const_sds min_val, const_sds max_val, int min_ex, int max_ex, void (*callback)(sds item, void *ctx), void *callback_ctx);
 
-/* Debug functions */
-bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
-bool fbtreeDebugValidateMergeEnforcement(fbtreeIndex *fbt);
-
 #endif /* FBTREE_ORDERED_INDEX_H */

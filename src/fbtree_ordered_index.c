@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "config.h"
 #include "fbtree_ordered_index.h"
+#include "fbtree_ordered_index_internal.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "sds.h"
@@ -22,75 +23,7 @@
 /* Anti-warning macro... */
 #ifndef UNUSED
 #define UNUSED(V) ((void)V)
-#endif
-
-/* Architecture-specific constants for node sizing.
- * 64-bit: optimized for 8-byte pointers, targets 1792-byte innerNode (jemalloc size class)
- * 32-bit: uses same logical fanout, smaller nodes due to 4-byte pointers */
-#define NODE_SIZE 61
-
-#if SIZE_MAX == UINT64_MAX   /* 64-bit */
-#define EMBED_PREFIX_LEN 254 /* Tuned so innerNode fits in 2048-byte jemalloc size class */
-#elif SIZE_MAX == UINT32_MAX /* 32-bit */
-#define EMBED_PREFIX_LEN 30  /* Tuned to fit innerNode exactly in 1024-byte jemalloc size class */
-#endif
-
-#define MIN_FILL (NODE_SIZE / 4) /* Minimum items before node underflows */
-#define FEATURE_SIZE 4
-#define FEATURE_ROW_SIZE 64 /* size of cache line */
-
-/* Common header for all node types */
-typedef struct {
-    bool is_leaf;
-    uint8_t num_items;
-} node;
-
-typedef struct {
-    node header;
-    char embedded_prefix[EMBED_PREFIX_LEN]; /* Short prefix inline; long prefix stores char* at aligned offset */
-    size_t prefix_len;                      /* Common prefix length of this node's anchor values (NOT all subtree keys).
-                                             * Features are the 4 bytes at offset prefix_len in each anchor, so the
-                                             * prefix skips identical leading bytes to keep features discriminating.
-                                             * Note: this can exceed a child's prefix_len — see updateCommonPrefix. */
-    char features[FEATURE_SIZE][FEATURE_ROW_SIZE];
-    sds anchors[NODE_SIZE]; /* High keys of children (rightmost value in each child's subtree) */
-    node *children[NODE_SIZE];
-    size_t child_sizes[NODE_SIZE];      /* subtree element counts for rank queries */
-    uint8_t child_num_items[NODE_SIZE]; /* direct item count of each child */
-} innerNode;
-
-typedef struct leafNode {
-    node header;
-    struct leafNode *prev;
-    struct leafNode *next;
-    sds values[NODE_SIZE];
-} leafNode;
-
-/* Architecture-specific size assertions */
-#if SIZE_MAX == UINT64_MAX /* 64-bit */
-static_assert(sizeof(innerNode) == 2048, "64-bit innerNode should fit in 2048-byte jemalloc size class");
-static_assert(sizeof(leafNode) == 512, "64-bit leafNode should fit perfectly in jemalloc size class");
-#elif SIZE_MAX == UINT32_MAX /* 32-bit */
-static_assert(sizeof(innerNode) == 1024, "32-bit innerNode should fit exactly in 1024-byte jemalloc size class");
-static_assert(sizeof(leafNode) == 256, "32-bit leafNode should fit perfectly in jemalloc size class");
-#endif
-static_assert(NODE_SIZE <= FEATURE_ROW_SIZE, "NODE_SIZE must fit in feature row");
-
-/* Get low_key (minimum) from leaf node - leaves are always kept sorted */
-static inline sds leafNodeLowKey(leafNode *leaf) {
-    return (leaf->header.num_items == 0) ? NULL : leaf->values[0];
-}
-
-/* Get high_key pointer from leaf node */
-static inline sds leafNodeHighKey(leafNode *leaf) {
-    return (leaf->header.num_items == 0) ? NULL : leaf->values[leaf->header.num_items - 1];
-}
-
-struct fbtreeIndex {
-    node *root;
-    leafNode *leftmost_leaf;  /* Cache for fast-path prepend */
-    leafNode *rightmost_leaf; /* Cache for fast-path append */
-};
+#endif;
 
 typedef enum {
     ITER_AT_POSITION,  /* Positioned at a valid element */
@@ -126,6 +59,7 @@ typedef struct {
     sds updated_anchor;    /* Pointer to updated anchor string if it's changed */
     bool delete_executed;  /* True if key was found and deleted, False if not found no-op */
     bool node_underflowed; /* True if child dropped below MIN_FILL after delete */
+    bool node_shrank;      /* True if a merge reduced this node's child count */
 } deleteResult;
 
 /* Conversion from user-facing opaque iterator type to internal struct */
@@ -133,11 +67,6 @@ static inline iter *iteratorFromOpaque(fbtreeIterator *iterator) {
     return (iter *)(void *)iterator;
 }
 
-/* Long prefix: when prefix_len > EMBED_PREFIX_LEN, pointer stored at aligned offset within embedded_prefix.
- * Compute offset to next pointer-aligned position within embedded_prefix. */
-#define LONG_PREFIX_PTR_OFFSET \
-    ((sizeof(void *) - (offsetof(innerNode, embedded_prefix) % sizeof(void *))) % sizeof(void *))
-static_assert(EMBED_PREFIX_LEN >= LONG_PREFIX_PTR_OFFSET + sizeof(char *), "embedded_prefix must fit aligned pointer");
 
 static inline bool innerNodeHasLongPrefix(innerNode *inner) {
     return inner->prefix_len > EMBED_PREFIX_LEN;
@@ -250,19 +179,6 @@ void fbtreeEmpty(fbtreeIndex *fbt) {
 void fbtreeFree(fbtreeIndex *fbt) {
     fbtreeEmpty(fbt);
     zfree(fbt);
-}
-
-/* Bias constant for SIMD unsigned comparison: XOR with 0x80 converts unsigned
- * [0,255] to signed [-128,127] while preserving order. Features are stored
- * pre-biased so we only need to bias the search target at lookup time. */
-#define FEATURE_BIAS 0x80
-
-/* Get feature byte j from string, returning 0 if string is too short.
- * Returns the biased value (XOR'd with 0x80) for SIMD comparison. */
-static inline char getFeatureByte(const_sds s, size_t prefix_len, int j) {
-    size_t idx = prefix_len + j;
-    unsigned char raw = (idx < sdslen(s)) ? (unsigned char)s[idx] : 0;
-    return (char)(raw ^ FEATURE_BIAS);
 }
 
 static void recomputeFeatures(innerNode *inner) {
@@ -397,6 +313,9 @@ static void innerNodeRemoveChildrenRange(innerNode *parent, int start_idx, int e
     parent->header.num_items -= remove_count;
 }
 
+/* TODO: Support asymmetric inner node splits for append/prepend (hint-gated),
+ * matching what leafNodeSplit does. Sequential loads would achieve ~100% inner
+ * node load factor instead of ~50%. Requires passing TraversalHint through. */
 static innerNode *innerNodeSplit(innerNode *left_node) {
     assert(left_node->header.num_items == NODE_SIZE);
     innerNode *right_node = innerNodeCreate();
@@ -466,14 +385,14 @@ static void unlinkLeaf(leafNode *leaf) {
     if (leaf->next) leaf->next->prev = leaf->prev;
 }
 
-static insertResult leafNodeSplit(leafNode *left_leaf, sds string) {
+static insertResult leafNodeSplit(leafNode *left_leaf, sds string, TraversalHint hint) {
     assert(left_leaf->header.num_items == NODE_SIZE);
 
     /* Binary search to find insertion point - reuse for pattern detection */
     int insert_index = leafNodeBinarySearch(left_leaf, string);
 
-    if (insert_index == NODE_SIZE) {
-        /* Append: create new node with just the new item, left unchanged */
+    if (insert_index == NODE_SIZE && hint == HINT_RIGHTMOST) {
+        /* Append at tree edge: create new node with just the new item, left unchanged */
         leafNode *right_leaf = leafNodeCreateWithItem(string);
         linkLeafRight(left_leaf, right_leaf);
         return (insertResult){
@@ -482,8 +401,8 @@ static insertResult leafNodeSplit(leafNode *left_leaf, sds string) {
             .inserted_item = right_leaf->values[0]};
     }
 
-    if (insert_index == 0) {
-        /* Prepend: move all items to new right node, left gets just new item */
+    if (insert_index == 0 && hint == HINT_LEFTMOST) {
+        /* Prepend at tree edge: move all items to new right node, left gets just new item */
         leafNode *right_leaf = leafNodeCreate();
         memcpy(right_leaf->values, left_leaf->values, NODE_SIZE * sizeof(sds));
         right_leaf->header.num_items = NODE_SIZE;
@@ -834,7 +753,7 @@ static insertResult subtreeInsert(node *n, sds string, TraversalHint hint) {
     if (n->is_leaf) {
         leafNode *leaf = (leafNode *)n;
         if (leaf->header.num_items == NODE_SIZE) {
-            return leafNodeSplit(leaf, string);
+            return leafNodeSplit(leaf, string, hint);
         } else {
             return leafNodeInsert(leaf, string);
         }
@@ -995,11 +914,12 @@ static void innerNodeMerge(innerNode *left, innerNode *right) {
 
 /* Attempt to merge the child at child_idx with a sibling in the parent.
  * Called when the child has underflowed (num_items < MIN_FILL).
- * Always merges right into left. Returns a pointer to the surviving (merged)
- * node, or NULL if no merge was possible. */
-static node *tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
+ * Always merges right into left. Returns the index of the surviving (merged)
+ * child, or -1 if no merge was possible. */
+static void mergeNodeChildren(fbtreeIndex *fbt, innerNode *inner);
+static int tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
     int child_count = parent->child_num_items[child_idx];
-    if (child_count >= MIN_FILL) return NULL;
+    if (child_count >= MIN_FILL) return -1;
 
     /* Pick the best sibling: prefer fewer items, check left then right */
     int best_sib = -1;
@@ -1012,7 +932,7 @@ static node *tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
             best_sib = child_idx + 1;
         }
     }
-    if (best_sib < 0) return NULL;
+    if (best_sib < 0) return -1;
 
     /* Always merge right into left */
     int left_idx = (best_sib < child_idx) ? best_sib : child_idx;
@@ -1039,10 +959,35 @@ static node *tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
     } else {
         innerNode *left_inner = (innerNode *)left_child;
         innerNode *right_inner = (innerNode *)right_child;
+        int boundary = left_inner->header.num_items;
         innerNodeMerge(left_inner, right_inner);
 
         innerNodeFreePrefix(right_inner);
         zfree(right_inner);
+
+        /* Children at the merge boundary are newly-adjacent siblings that
+         * were previously in separate parents. Check if they can merge.
+         * After a merge, the surviving child may still be underflowed and
+         * mergeable with its new neighbor, so loop until stable.
+         * Finally, check all children — the merge may have brought together
+         * children from both sides that have underflowed neighbors. */
+        if (boundary > 0 && boundary < left_inner->header.num_items) {
+            left_inner->child_num_items[boundary - 1] = left_inner->children[boundary - 1]->num_items;
+            left_inner->child_num_items[boundary] = left_inner->children[boundary]->num_items;
+            int ci = (left_inner->child_num_items[boundary] < MIN_FILL) ? boundary :
+                     (left_inner->child_num_items[boundary - 1] < MIN_FILL) ? boundary - 1 : -1;
+            while (ci >= 0 && ci < left_inner->header.num_items) {
+                int merged_idx = tryMergeChild(fbt, left_inner, ci);
+                if (merged_idx < 0) break;
+                ci = merged_idx;
+                left_inner->child_num_items[ci] = left_inner->children[ci]->num_items;
+            }
+        }
+        /* TODO: mergeNodeChildren scans all children of the merged node.
+         * It may be possible to only check the specific children that gained
+         * new siblings from the other side of the merge, but index tracking
+         * through the cascade makes this tricky. Profile before optimizing. */
+        mergeNodeChildren(fbt, left_inner);
     }
 
     /* Parent fixup: copy right's anchor/features to left's slot */
@@ -1066,7 +1011,7 @@ static node *tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
         updateCommonPrefix(parent);
     }
 
-    return left_child;
+    return left_idx;
 }
 
 static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds item) {
@@ -1098,7 +1043,7 @@ static deleteResult leafNodeDelete(fbtreeIndex *fbt, leafNode *leaf, const_sds i
     return result;
 }
 
-static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
+static deleteResult subtreeDeleteItem(fbtreeIndex *fbt, node *n, const_sds item) {
     if (n->is_leaf)
         return leafNodeDelete(fbt, (leafNode *)n, item);
 
@@ -1106,7 +1051,7 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
     int index = findChildIndex(inner, item);
     if (index == inner->header.num_items) return (deleteResult){0};
 
-    deleteResult child_result = subtreeDelete(fbt, inner->children[index], item);
+    deleteResult child_result = subtreeDeleteItem(fbt, inner->children[index], item);
     if (!child_result.delete_executed) return child_result;
 
     /* Update child size after delete */
@@ -1135,14 +1080,36 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
         return (deleteResult){
             .updated_anchor = new_anchor,
             .delete_executed = true,
-            .node_underflowed = inner->header.num_items < MIN_FILL};
+            .node_underflowed = inner->header.num_items < MIN_FILL,
+            .node_shrank = true};
     }
 
     inner->child_num_items[index] = inner->children[index]->num_items;
 
     /* Attempt merge if child underflowed */
+    bool merged = false;
     if (child_result.node_underflowed && inner->header.num_items > 1) {
-        tryMergeChild(fbt, inner, index);
+        int merged_idx = tryMergeChild(fbt, inner, index);
+        if (merged_idx >= 0) merged = true;
+    }
+
+    /* If the child shrank (from a merge deeper in the tree), its sibling
+     * may be underflowed and now able to merge with the smaller child.
+     * Check immediate neighbors of the child. */
+    if (child_result.node_shrank && !child_result.node_underflowed && inner->header.num_items > 1) {
+        inner->child_num_items[index] = inner->children[index]->num_items;
+        if (index > 0) {
+            inner->child_num_items[index - 1] = inner->children[index - 1]->num_items;
+            if (inner->child_num_items[index - 1] < MIN_FILL) {
+                if (tryMergeChild(fbt, inner, index - 1) >= 0) merged = true;
+            }
+        }
+        if (index < inner->header.num_items - 1) {
+            inner->child_num_items[index + 1] = inner->children[index + 1]->num_items;
+            if (inner->child_num_items[index + 1] < MIN_FILL) {
+                if (tryMergeChild(fbt, inner, index + 1) >= 0) merged = true;
+            }
+        }
     }
 
     /* Recompute updated_anchor: after a merge, the last child may have changed */
@@ -1154,7 +1121,8 @@ static deleteResult subtreeDelete(fbtreeIndex *fbt, node *n, const_sds item) {
     deleteResult result = {
         .updated_anchor = updated_anchor,
         .delete_executed = true,
-        .node_underflowed = inner->header.num_items < MIN_FILL};
+        .node_underflowed = inner->header.num_items < MIN_FILL,
+        .node_shrank = merged};
     return result;
 }
 
@@ -1178,7 +1146,7 @@ static void fbtreePostDeleteCleanup(fbtreeIndex *fbt) {
 bool fbtreeDelete(fbtreeIndex *fbt, const_sds item) {
     if (fbt->root == NULL) return false;
 
-    deleteResult result = subtreeDelete(fbt, fbt->root, item);
+    deleteResult result = subtreeDeleteItem(fbt, fbt->root, item);
     if (!result.delete_executed) return false;
 
     fbtreePostDeleteCleanup(fbt);
@@ -1587,9 +1555,6 @@ void fbtreeSeekToValue(fbtreeIndex *fbt, const_sds value, fbtreeIterator *iterat
 
 /* ========== Range Deletion ========== */
 
-/* Maximum tree depth. NODE_SIZE=61, so depth 6 handles >61^6 = ~51 billion elements. */
-#define MAX_TREE_DEPTH 16
-
 /* Boundary paths captured by path builders for use by deleteRangeCore and
  * deleteRangeSameLeaf. Stack-allocated; all arrays bounded by MAX_TREE_DEPTH. */
 typedef struct {
@@ -1704,95 +1669,143 @@ static int resolveEndIdx(const leafNode *leaf, const void *key, int exclusive, l
     return lo - 1;
 }
 
-/* Merge underflowed nodes after range deletion. Only walks the O(log N)
- * affected paths, not the entire tree. Three phases:
- * TODO: Not actually implemented (yet), currently does a full tree walk
- *
- * 1. Legs (bottom-up): Each sub-path is like a subtree that had its
- *    min or max range removed. Walk each leg bottom-up, merging the
- *    boundary child at each level if underflowed. This is equivalent
- *    to the merge cascade in single-item deletion.
- *
- * 2. Crotch (split node): After leg merges, the top-of-leg nodes may
- *    have fewer children. Check all of the split node's children for
- *    underflow and merge as needed. If the left and right boundary
- *    children both underflowed and merge together, the paths "zip"
- *    together — but this is handled naturally by mergeNodeChildren.
- *
- * 3. Common path (bottom-up): The split node may have lost children
- *    from crotch merges, causing it to underflow. Walk the shared
- *    path bottom-up, merging at each level until no underflow remains.
- *    At most one node underflows per level, same as single-item delete. */
-
 /* Check all children of an inner node for underflow and merge any that
  * are below MIN_FILL with a sibling. */
 static void mergeNodeChildren(fbtreeIndex *fbt, innerNode *inner) {
     if (inner->header.num_items <= 1) return;
     for (int i = inner->header.num_items - 1; i >= 0; i--) {
-        inner->child_num_items[i] = inner->children[i]->num_items;
         if (inner->child_num_items[i] < MIN_FILL) {
             tryMergeChild(fbt, inner, i);
         }
     }
 }
 
-/* Recursively merge underflowed children top-down. */
-static void mergeUnderflowedChildren(fbtreeIndex *fbt, node *n) {
-    if (!n || n->is_leaf) return;
+/* Recursively merge underflowed children top-down through a subtree.
+ * max_depth: maximum number of levels to recurse. */
+static void mergeSubtreeUnderflowed(fbtreeIndex *fbt, node *n, int max_depth) {
+    if (!n || n->is_leaf || max_depth <= 0) return;
     innerNode *inner = (innerNode *)n;
     if (inner->header.num_items <= 1) return;
 
     for (int i = inner->header.num_items - 1; i >= 0; i--) {
-        inner->child_num_items[i] = inner->children[i]->num_items;
         if (inner->child_num_items[i] < MIN_FILL) {
             tryMergeChild(fbt, inner, i);
         }
     }
 
     for (int i = 0; i < inner->header.num_items; i++) {
-        mergeUnderflowedChildren(fbt, inner->children[i]);
+        mergeSubtreeUnderflowed(fbt, inner->children[i], max_depth - 1);
+        /* Recursion may have merged children within children[i], changing
+         * its num_items. Update the cache so the re-check pass below sees
+         * the correct value. */
+        inner->child_num_items[i] = inner->children[i]->num_items;
     }
 
-    /* Refresh child_num_items after recursion — child-level merges may
-     * have changed children's num_items. Re-check for underflow. */
+    /* Re-check after recursion — child-level merges may have caused new
+     * underflows visible from this level. */
     for (int i = inner->header.num_items - 1; i >= 0; i--) {
-        inner->child_num_items[i] = inner->children[i]->num_items;
         if (inner->header.num_items > 1 && inner->child_num_items[i] < MIN_FILL) {
             tryMergeChild(fbt, inner, i);
         }
     }
 }
 
-/* Merge underflowed nodes after range deletion. Conceptually three phases:
+/* Merge underflowed boundary nodes along a sub-path (leg) bottom-up.
+ * At each level, check the boundary child for underflow. If a merge happens,
+ * re-check at the same level (the merged node might be mergeable with its
+ * new sibling). Update path pointers as merges happen.
+ *
+ * Also check the boundary child's immediate siblings: the range delete may
+ * have shrunk the boundary child (without underflowing it), making a
+ * previously-unmergeable underflowed sibling now fit. */
+static void mergeBoundaryPath(fbtreeIndex *fbt, node *path[], int path_idx[], int path_depth) {
+    for (int d = path_depth - 1; d >= 0; d--) {
+        innerNode *inner = (innerNode *)path[d];
+        if (inner->header.num_items <= 1) continue;
+        int ci = path_idx[d];
+        if (ci >= inner->header.num_items) continue;
+        inner->child_num_items[ci] = inner->children[ci]->num_items;
+        while (inner->header.num_items > 1 && inner->child_num_items[ci] < MIN_FILL) {
+            int merged_idx = tryMergeChild(fbt, inner, ci);
+            if (merged_idx < 0) break;
+            ci = merged_idx;
+            path_idx[d] = ci;
+            inner->child_num_items[ci] = inner->children[ci]->num_items;
+        }
+        /* The boundary child may have shrunk without underflowing. Check
+         * its immediate siblings — they may be underflowed and now able
+         * to merge with the smaller boundary child. */
+        if (ci > 0 && inner->header.num_items > 1) {
+            inner->child_num_items[ci - 1] = inner->children[ci - 1]->num_items;
+            if (inner->child_num_items[ci - 1] < MIN_FILL) {
+                tryMergeChild(fbt, inner, ci - 1);
+            }
+        }
+        if (ci < inner->header.num_items - 1 && inner->header.num_items > 1) {
+            inner->child_num_items[ci + 1] = inner->children[ci + 1]->num_items;
+            if (inner->child_num_items[ci + 1] < MIN_FILL) {
+                tryMergeChild(fbt, inner, ci + 1);
+            }
+        }
+    }
+}
+
+/* Merge underflowed nodes after range deletion. Three phases:
  *
  * 1. Legs: Each sub-path had children removed from one side. The boundary
  *    child at each level may be underflowed and needs merging with a sibling.
+ *    Also checks the boundary child's immediate siblings — the boundary
+ *    child may have shrunk (without underflowing), making a previously-
+ *    unmergeable underflowed sibling now fit.
+ *    Handled by mergeBoundaryPath (O(sub-path depth) per leg).
  *
- * 2. Crotch: The split node's boundary children (tops of the legs) may be
- *    underflowed after leg merges reduced their child count.
+ * 2. Crotch: The split node has two boundary children (top of each leg).
+ *    mergeNodeChildren checks all children for underflow in one pass.
  *
- * 3. Common path: Merges at the split node may reduce its child count,
- *    causing it to underflow from its parent's perspective. This cascades
- *    upward like single-item deletion.
- *
- * We implement this as a top-down recursive walk that checks all children
- * at each level. Only nodes with underflowed children trigger merges;
- * unaffected subtrees are visited but no work is done (just a num_items
- * comparison per child). A subsequent bottom-up pass propagates any
- * underflows caused by the top-down merges. */
+ * 3. Common path: Above the split node, each level has a single boundary
+ *    child — same as a leg. Handled by mergeBoundaryPath on the shared path
+ *    (excluding the split node, which was already handled in Phase 2). */
 static void mergeAfterRangeDelete(fbtreeIndex *fbt, BoundaryPaths *bp) {
-    UNUSED(bp);
-    /* TODO: Scope the merge walk to only the affected paths (shared path +
-     * sub-paths) instead of the full tree. This would reduce the merge pass
-     * from O(N/NODE_SIZE) to O(log N) node visits. The BoundaryPaths struct
-     * already records the affected nodes, but stale indices after Phase 4
-     * child removal and cascading underflows across the leg/crotch boundary
-     * make a path-scoped implementation tricky. For million-element trees
-     * the current full-tree walk visits ~16K inner nodes with just an
-     * integer comparison per child — likely acceptable but worth revisiting
-     * if profiling shows this is a bottleneck. */
     if (!fbt->root || fbt->root->is_leaf) return;
-    mergeUnderflowedChildren(fbt, fbt->root);
+
+    /* Phase 1: Merge within each leg (sub-path) bottom-up. */
+    mergeBoundaryPath(fbt, bp->left_sub_path, bp->left_sub_idx, bp->left_sub_depth);
+    mergeBoundaryPath(fbt, bp->right_sub_path, bp->right_sub_idx, bp->right_sub_depth);
+
+    /* Leg merges may have changed the split node's boundary children's
+     * num_items. Update the cache so Phase 2 sees correct values. */
+    if (bp->shared_depth > 0) {
+        innerNode *split = (innerNode *)bp->shared_path[bp->shared_depth - 1];
+        if (!split->header.is_leaf) {
+            int li = bp->shared_left_idx[bp->shared_depth - 1];
+            int ri = bp->shared_right_idx[bp->shared_depth - 1];
+            if (li < split->header.num_items)
+                split->child_num_items[li] = split->children[li]->num_items;
+            if (ri < split->header.num_items && ri != li)
+                split->child_num_items[ri] = split->children[ri]->num_items;
+        }
+    }
+
+    /* Phase 2: Merge at the crotch (split node). It has two boundary
+     * children (top of each leg), so mergeNodeChildren handles both. */
+    if (bp->shared_depth > 0) {
+        innerNode *split = (innerNode *)bp->shared_path[bp->shared_depth - 1];
+        if (!split->header.is_leaf) {
+            mergeNodeChildren(fbt, split);
+        }
+        /* Update the split node's parent's cache — mergeNodeChildren may
+         * have changed the split node's num_items. */
+        if (bp->shared_depth >= 2) {
+            innerNode *split_parent = (innerNode *)bp->shared_path[bp->shared_depth - 2];
+            int ci = bp->shared_left_idx[bp->shared_depth - 2];
+            if (ci < split_parent->header.num_items)
+                split_parent->child_num_items[ci] = split_parent->children[ci]->num_items;
+        }
+    }
+
+    /* Phase 3: Merge along the common path above the split node.
+     * Each level has a single boundary child, same as a leg. */
+    mergeBoundaryPath(fbt, bp->shared_path, bp->shared_left_idx, bp->shared_depth - 1);
 }
 
 /* Delete a range within a single leaf. The shared_path records the path from
@@ -2004,7 +2017,9 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
             innerNodeRemoveChildrenRange(inner, 0, ci - 1);
         }
 
-        /* Boundary child is now at index 0 (if we removed left children) */
+        /* Boundary child is now at index 0 (if we removed left children).
+         * Update the recorded index so the merge pass can use it. */
+        bp->right_sub_idx[d] = 0;
         int new_ci = 0;
         inner->child_sizes[new_ci] = getSubtreeSize(inner->children[new_ci]);
         if (inner->child_sizes[new_ci] == 0) {
@@ -2050,7 +2065,10 @@ static unsigned long deleteRangeCore(fbtreeIndex *fbt, BoundaryPaths *bp, fbtree
             innerNodeRemoveChildrenRange(split_node, remove_start, remove_end);
         }
 
-        /* Rebuild anchors/features for all surviving children */
+        /* Rebuild anchors/features for all surviving children.
+         * TODO: Only the boundary children (li and ri) were modified — children
+         * outside the deleted range still have correct metadata. Tighten this
+         * to only update the boundary children after the remove/shift. */
         for (int i = 0; i < split_node->header.num_items; i++) {
             split_node->child_sizes[i] = getSubtreeSize(split_node->children[i]);
             split_node->child_num_items[i] = split_node->children[i]->num_items;
@@ -2521,33 +2539,40 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
 
 /* Validate merge enforcement: no non-root node has num_items < MIN_FILL
  * unless all siblings have num_items + node.num_items > NODE_SIZE.
- * Returns true if the property holds. */
-static bool validateMergeEnforcementInner(innerNode *inner) {
+ * Returns -1 if the property holds, or the depth (0-indexed from root)
+ * of the first violation found. */
+static int validateMergeEnforcementInner(innerNode *inner, int depth) {
     /* Check each child: if it has num_items < MIN_FILL, verify no sibling could absorb it */
     for (int i = 0; i < inner->header.num_items; i++) {
-        int child_items = inner->child_num_items[i];
+        int child_items = inner->children[i]->num_items;
         if (child_items < MIN_FILL) {
             /* Check left sibling */
-            if (i > 0 && inner->child_num_items[i - 1] + child_items <= NODE_SIZE) {
-                return false; /* Could have merged with left sibling */
+            if (i > 0 && inner->children[i - 1]->num_items + child_items <= NODE_SIZE) {
+                return depth;
             }
             /* Check right sibling */
-            if (i < inner->header.num_items - 1 && inner->child_num_items[i + 1] + child_items <= NODE_SIZE) {
-                return false; /* Could have merged with right sibling */
+            if (i < inner->header.num_items - 1 && inner->children[i + 1]->num_items + child_items <= NODE_SIZE) {
+                return depth;
             }
         }
 
         /* Recurse into inner children */
         if (!inner->children[i]->is_leaf) {
-            if (!validateMergeEnforcementInner((innerNode *)inner->children[i])) {
-                return false;
-            }
+            int result = validateMergeEnforcementInner((innerNode *)inner->children[i], depth + 1);
+            if (result >= 0) return result;
         }
     }
-    return true;
+    return -1;
 }
 
 bool fbtreeDebugValidateMergeEnforcement(fbtreeIndex *fbt) {
     if (!fbt->root || fbt->root->is_leaf) return true;
-    return validateMergeEnforcementInner((innerNode *)fbt->root);
+    return validateMergeEnforcementInner((innerNode *)fbt->root, 0) < 0;
+}
+
+/* Like fbtreeDebugValidateMergeEnforcement but returns the depth of the
+ * first violation, or -1 if no violations. */
+int fbtreeDebugValidateMergeEnforcementDepth(fbtreeIndex *fbt) {
+    if (!fbt->root || fbt->root->is_leaf) return -1;
+    return validateMergeEnforcementInner((innerNode *)fbt->root, 0);
 }
