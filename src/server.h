@@ -498,7 +498,6 @@ typedef enum {
 #define SUPERVISED_UPSTART 3
 
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
-#define ZSKIPLIST_MAX_SEARCH 10
 
 /* Append only defines */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
@@ -1490,7 +1489,9 @@ struct sharedObjectsStruct {
     sds minstring, maxstring;
 };
 
-/* ZSETs use a specialized version of Skiplists */
+/* ZSETs use a specialized version of Skiplists.
+ * Full definitions are here because many files dereference these types.
+ * Internal helpers and additional declarations are in skiplist_internal.h. */
 typedef struct zskiplistNode {
     union {
         double score;         /* Sorting score for node ordering. */
@@ -3891,6 +3892,7 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t genHashFunctionConfigurableSeed(const char *buf, size_t len);
 uint64_t dictCStrHash(const void *key);
 uint64_t dictCStrCaseHash(const void *key);
 uint64_t dictEncObjHash(const void *key);
