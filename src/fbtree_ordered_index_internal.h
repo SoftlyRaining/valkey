@@ -86,6 +86,15 @@ static inline sds leafNodeHighKey(leafNode *leaf) {
     return (leaf->header.num_items == 0) ? NULL : leaf->values[leaf->header.num_items - 1];
 }
 
+/* Get high_key (maximum anchor) from any node type */
+static inline sds nodeHighKey(node *n) {
+    if (n->is_leaf) {
+        return leafNodeHighKey((leafNode *)n);
+    }
+    innerNode *inner = (innerNode *)n;
+    return (inner->header.num_items == 0) ? NULL : inner->anchors[inner->header.num_items - 1];
+}
+
 /* Get feature byte j from string s, biased for SIMD signed comparison.
  * Returns 0 ^ FEATURE_BIAS if the string is shorter than prefix_len + j. */
 static inline char getFeatureByte(const_sds s, size_t prefix_len, int j) {

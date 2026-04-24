@@ -1338,8 +1338,27 @@ TEST_F(FbtreeOrderedIndexTest, SeekToRank) {
 TEST_F(FbtreeOrderedIndexTest, ReverseIteration) {
     test_reverse_iteration_generic(&fbtreeOrderedIndexOps);
 }
-
-/* NOTE: These tests require delete_range_by_score/rank which are not yet implemented for fbtree:
- * - DeleteRangeByScore, DeleteRangeByRank, RangeDeleteEdgeCases, RangeBoundaryPrecision
- * - SeekToScoreRange, SeekToScoreRangeIteration
- */
+TEST_F(FbtreeOrderedIndexTest, SeekToScoreRange) {
+    test_seek_to_score_range_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, SeekToScoreRangeIteration) {
+    test_seek_to_score_range_iteration_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, DeleteRangeByScore) {
+    test_delete_range_by_score_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, DeleteRangeByRank) {
+    test_delete_range_by_rank_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, RangeBoundaryPrecision) {
+    test_range_boundary_precision_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, RangeDeleteEdgeCases) {
+    test_range_delete_edge_cases_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, SeekInfReverseIteration) {
+    test_seek_inf_reverse_iteration_generic(&fbtreeOrderedIndexOps);
+}
+TEST_F(FbtreeOrderedIndexTest, SeekInfForwardIteration) {
+    test_seek_inf_forward_iteration_generic(&fbtreeOrderedIndexOps);
+}

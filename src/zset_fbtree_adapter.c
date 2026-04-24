@@ -35,10 +35,10 @@ static inline uint64_t scoreToSortable(double score) {
     uint64_t bits;
     memcpy(&bits, &score, sizeof(bits));
     /* Flip sign bit for positives, all bits for negatives */
-    if (bits & ((uint64_t)1 << 63)) {
+    if (bits & (1ULL << 63)) {
         bits = ~bits;
     } else {
-        bits ^= ((uint64_t)1 << 63);
+        bits ^= (1ULL << 63);
     }
     /* Convert to big-endian for lexicographic comparison */
     return htonu64(bits);
@@ -48,8 +48,8 @@ static inline double sortableToScore(uint64_t be) {
     /* Convert from big-endian */
     uint64_t bits = ntohu64(be);
     /* Reverse the transformation */
-    if (bits & ((uint64_t)1 << 63)) {
-        bits ^= ((uint64_t)1 << 63);
+    if (bits & (1ULL << 63)) {
+        bits ^= (1ULL << 63);
     } else {
         bits = ~bits;
     }
@@ -179,54 +179,48 @@ static void zsetFbtreeSeekToRank(OrderedIndexIterator *iter, unsigned long rank)
 }
 
 static void zsetFbtreeSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    UNUSED(max); /* max is checked during iteration, not seek */
-    UNUSED(max_ex);
-
     fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
-    fbtreeIndex *fbt = NULL;
+    fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);
+    if (!fbt) return;
 
-    /* Get fbt pointer - need to init iterator first to extract it */
-    /* The iterator stores fbt pointer after init, we need the index from caller context */
-    /* For now, we require the iterator to already be initialized with the index */
-
-    /* Convert min score to sortable format */
-    uint64_t min_sortable = scoreToSortable(min);
-
-    /* Seek to first element >= min */
-    /* Note: fbtreeSeekToScore needs the fbt pointer, but we only have the iterator.
-     * The iterator was initialized with fbtreeInitIterator which stores fbt internally.
-     * We need to access it - for now extract from the opaque iterator. */
-    typedef struct {
-        void *fbt;
-        void *leaf;
-        uint8_t idx;
-        uint8_t cnt;
-    } iter_internal;
-    iter_internal *it = (iter_internal *)fbt_iter;
-    fbt = (fbtreeIndex *)it->fbt;
-
-    if (!fbt) return; /* Iterator not initialized */
-
-    fbtreeSeekToScore(fbt, (const char *)&min_sortable, fbt_iter);
-
-    /* Handle exclusive min: skip elements with score == min */
-    if (min_ex) {
-        const_sds pos;
-        while (fbtreeNext(fbt_iter, &pos)) {
-            double score = unpackScore(pos);
-            if (score > min) {
-                /* Back up one position - we want this element */
-                it->idx--;
-                break;
-            }
-        }
+    /* Empty range check */
+    if (min > max || (min == max && (min_ex || max_ex))) {
+        fbtreeResetIterator(fbt_iter);
+        return;
     }
 
-    /* Apply offset */
-    while (offset > 0) {
-        const_sds pos;
-        if (!fbtreeNext(fbt_iter, &pos)) break;
-        offset--;
+    uint64_t sortable;
+    if (offset >= 0) {
+        /* Positive offset: seek from the start of the range */
+        sortable = scoreToSortable(min);
+        if (min_ex) {
+            /* Exclusive min: increment to the next representable score so
+             * fbtreeSeekToScore lands past all elements with score == min. */
+            uint64_t native = ntohu64(sortable);
+            native++;
+            sortable = htonu64(native);
+        }
+    } else {
+        /* Negative offset: seek from the end of the range.
+         * Find the rank one past the last in-range element, then
+         * target = one_past + offset (offset is negative, e.g. -1 → last). */
+        sortable = scoreToSortable(max);
+        if (!max_ex) {
+            /* Inclusive max: increment to next score so seek lands past all
+             * elements with score == max. */
+            uint64_t native = ntohu64(sortable);
+            native++;
+            sortable = htonu64(native);
+        }
+    }
+    long target = offset + fbtreeSeekToScore((const char *)&sortable, fbt_iter);
+
+    /* Negative target means offset went past the start of the range.
+     * We need to avoid underflow with fbtreeSeekToRank. */
+    if (target < 0) {
+        fbtreeResetIterator(fbt_iter);
+    } else {
+        fbtreeSeekToRank(fbt_iter, (unsigned long)target);
     }
 }
 

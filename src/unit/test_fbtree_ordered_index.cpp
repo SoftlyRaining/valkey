@@ -565,23 +565,28 @@ TEST_F(FbtreeTest, IteratorExhaustedStaysInvalid) {
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_FALSE(fbtreeNext(&it, &pos));
     EXPECT_FALSE(fbtreeNext(&it, &pos));
-    /* Can't reverse from exhausted state */
-    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    /* Can reverse from exhausted-forward state */
+    EXPECT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_STREQ(pos, "x");
 
-    /* Exhaust backward - same behavior */
+    /* Exhaust backward - repeated calls stay false */
     fbtreeInitIterator(&it, fbt);
     ASSERT_TRUE(fbtreePrev(&it, &pos));
     EXPECT_FALSE(fbtreePrev(&it, &pos));
     EXPECT_FALSE(fbtreePrev(&it, &pos));
-    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    /* Can reverse from exhausted-backward state */
+    EXPECT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_STREQ(pos, "x");
 
-    /* Can reverse from last item, but not after exhausting */
+    /* Can reverse from last item */
     fbtreeInitIterator(&it, fbt);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     ASSERT_TRUE(fbtreePrev(&it, &pos));
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_FALSE(fbtreeNext(&it, &pos));
-    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    /* Reverse still works after exhaustion */
+    EXPECT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_STREQ(pos, "x");
 
     /* Same for first item */
     fbtreeInitIterator(&it, fbt);
@@ -589,7 +594,9 @@ TEST_F(FbtreeTest, IteratorExhaustedStaysInvalid) {
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     ASSERT_TRUE(fbtreePrev(&it, &pos));
     EXPECT_FALSE(fbtreePrev(&it, &pos));
-    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    /* Reverse still works after exhaustion */
+    EXPECT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_STREQ(pos, "x");
 }
 
 /* ========== Multi-Level Tree Tests ========== */
@@ -1463,6 +1470,58 @@ TEST_F(FbtreeTest, SeekToRankOutOfBounds) {
     /* Seek past end */
     fbtreeSeekToRank(&it, 100);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
+
+    /* Prev recovers from past-end (single-leaf tree) */
+    fbtreeSeekToRank(&it, 100);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_009", 8), 0);
+
+    /* Seek to exact length (one past last valid rank) */
+    fbtreeSeekToRank(&it, 10);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_009", 8), 0);
+
+    /* Seek to last valid rank */
+    fbtreeSeekToRank(&it, 9);
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "key_009", 8), 0);
+}
+
+TEST_F(FbtreeTest, SeekToRankOutOfBoundsMultilevel) {
+    const int count = NODE_SIZE * 3;
+    char buf[16];
+    for (int i = 0; i < count; i++) {
+        snprintf(buf, sizeof(buf), "key_%05d", i);
+        insert(buf);
+    }
+
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    /* Seek past end */
+    fbtreeSeekToRank(&it, count + 100);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+
+    /* Prev recovers from past-end */
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    snprintf(buf, sizeof(buf), "key_%05d", count - 1);
+    EXPECT_EQ(memcmp(pos, buf, strlen(buf)), 0);
+
+    /* Seek to exact length */
+    fbtreeSeekToRank(&it, count);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
+}
+
+TEST_F(FbtreeTest, SeekToRankEmptyTree) {
+    fbtreeIterator it;
+    fbtreeInitIterator(&it, fbt);
+    const_sds pos;
+
+    fbtreeSeekToRank(&it, 0);
+    EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
 TEST_F(FbtreeTest, RankDeepTree) {
@@ -1498,7 +1557,7 @@ TEST_F(FbtreeTest, SeekToScoreExact) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    fbtreeSeekToScore("BBBBBBBB", &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -1511,7 +1570,7 @@ TEST_F(FbtreeTest, SeekToScoreBetween) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    fbtreeSeekToScore("BBBBBBBB", &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -1523,7 +1582,7 @@ TEST_F(FbtreeTest, SeekToScorePastEnd) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
+    fbtreeSeekToScore("ZZZZZZZZ", &it);
 
     const_sds pos;
     EXPECT_FALSE(fbtreeNext(&it, &pos));
@@ -1536,7 +1595,7 @@ TEST_F(FbtreeTest, SeekToScorePastEndThenPrev) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
+    fbtreeSeekToScore("ZZZZZZZZ", &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreePrev(&it, &pos));
@@ -1547,11 +1606,12 @@ TEST_F(FbtreeTest, SeekToScorePastEndThenPrev) {
     EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
     EXPECT_FALSE(fbtreePrev(&it, &pos));
 
-    /* Forward from past-end invalidates */
+    /* Forward from past-end — Next fails, but Prev can be used */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
+    fbtreeSeekToScore("ZZZZZZZZ", &it);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
-    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "CCCCCCCC", 8), 0);
 }
 
 TEST_F(FbtreeTest, SeekToScoreBeforeStartThenNext) {
@@ -1561,7 +1621,7 @@ TEST_F(FbtreeTest, SeekToScoreBeforeStartThenNext) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    fbtreeSeekToScore("AAAAAAAA", &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -1572,11 +1632,12 @@ TEST_F(FbtreeTest, SeekToScoreBeforeStartThenNext) {
     EXPECT_EQ(memcmp(pos, "OOOOOOOO", 8), 0);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Backward from before-start invalidates */
+    /* Backward from before-start — Prev fails, but Next can be used */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    fbtreeSeekToScore("AAAAAAAA", &it);
     EXPECT_FALSE(fbtreePrev(&it, &pos));
-    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
 }
 
 TEST_F(FbtreeTest, SeekToScoreBeforeStart) {
@@ -1584,7 +1645,7 @@ TEST_F(FbtreeTest, SeekToScoreBeforeStart) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    fbtreeSeekToScore("AAAAAAAA", &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -1594,7 +1655,7 @@ TEST_F(FbtreeTest, SeekToScoreBeforeStart) {
 TEST_F(FbtreeTest, SeekToScoreEmpty) {
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    fbtreeSeekToScore("AAAAAAAA", &it);
 
     const_sds pos;
     EXPECT_FALSE(fbtreeNext(&it, &pos));
@@ -1608,7 +1669,7 @@ TEST_F(FbtreeTest, SeekToScoreExactThenPrev) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    fbtreeSeekToScore("BBBBBBBB", &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreePrev(&it, &pos));
@@ -1624,19 +1685,19 @@ TEST_F(FbtreeTest, SeekToScoreSingleElement) {
 
     /* Exact match */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "MMMMMMMM", &it);
+    fbtreeSeekToScore("MMMMMMMM", &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
 
     /* Before */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "AAAAAAAA", &it);
+    fbtreeSeekToScore("AAAAAAAA", &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "MMMMMMMM", 8), 0);
 
     /* After */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "ZZZZZZZZ", &it);
+    fbtreeSeekToScore("ZZZZZZZZ", &it);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
 }
 
@@ -1654,12 +1715,12 @@ TEST_F(FbtreeTest, SeekToScoreDeepTree) {
     const_sds pos;
 
     snprintf(buf, sizeof(buf), "%08d", count / 2);
-    fbtreeSeekToScore(fbt, buf, &it);
+    fbtreeSeekToScore(buf, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, buf, 8), 0);
 
     snprintf(buf, sizeof(buf), "%08d", count - 10);
-    fbtreeSeekToScore(fbt, buf, &it);
+    fbtreeSeekToScore(buf, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, buf, 8), 0);
 }
@@ -1675,7 +1736,7 @@ TEST_F(FbtreeTest, SeekToScoreIterate) {
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    fbtreeSeekToScore("BBBBBBBB", &it);
 
     const_sds pos;
     int count = 0;
@@ -1699,13 +1760,13 @@ TEST_F(FbtreeTest, SeekToScoreDuplicateScores) {
 
     /* Seek to "BBBBBBBB" - should land at first B element */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    fbtreeSeekToScore("BBBBBBBB", &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "BBBBBBBBa_elem", 15), 0);
 
     /* Prev from that position should return the A element */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, "BBBBBBBB", &it);
+    fbtreeSeekToScore("BBBBBBBB", &it);
     ASSERT_TRUE(fbtreePrev(&it, &pos));
     EXPECT_EQ(memcmp(pos, "AAAAAAAA", 8), 0);
 }
@@ -2210,7 +2271,7 @@ TEST_F(FbtreeTest, SeekToValueExact) {
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     sds seek_val = createString("banana");
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -2230,7 +2291,7 @@ TEST_F(FbtreeTest, SeekToValueBetween) {
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     sds seek_val = createString("banana");
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
 
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -2249,20 +2310,21 @@ TEST_F(FbtreeTest, SeekToValuePastEnd) {
     const_sds pos;
 
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
 
     /* Prev from past-end returns last element */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreePrev(&it, &pos));
     EXPECT_EQ(memcmp(pos, "cherry", 7), 0);
 
-    /* Forward from past-end invalidates */
+    /* Forward from past-end — Next fails, but Prev can be used */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
-    EXPECT_FALSE(fbtreePrev(&it, &pos));
+    ASSERT_TRUE(fbtreePrev(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "cherry", 7), 0);
 
     sdsfree(seek_val);
 }
@@ -2277,7 +2339,7 @@ TEST_F(FbtreeTest, SeekToValueBeforeStart) {
     const_sds pos;
 
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "banana", 7), 0);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -2286,11 +2348,12 @@ TEST_F(FbtreeTest, SeekToValueBeforeStart) {
     EXPECT_EQ(memcmp(pos, "date", 5), 0);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
 
-    /* Backward from before-start invalidates */
+    /* Backward from before-start — Prev fails, but Next can be used */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     EXPECT_FALSE(fbtreePrev(&it, &pos));
-    EXPECT_FALSE(fbtreeNext(&it, &pos));
+    ASSERT_TRUE(fbtreeNext(&it, &pos));
+    EXPECT_EQ(memcmp(pos, "banana", 7), 0);
 
     sdsfree(seek_val);
 }
@@ -2299,7 +2362,7 @@ TEST_F(FbtreeTest, SeekToValueEmpty) {
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
     sds seek_val = createString("anything");
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
 
     const_sds pos;
     EXPECT_FALSE(fbtreeNext(&it, &pos));
@@ -2318,7 +2381,7 @@ TEST_F(FbtreeTest, SeekToValueSingleElement) {
     /* Exact match */
     fbtreeInitIterator(&it, fbt);
     sds exact = createString("middle");
-    fbtreeSeekToValue(fbt, exact, &it);
+    fbtreeSeekToValue(exact, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "middle", 7), 0);
     sdsfree(exact);
@@ -2326,7 +2389,7 @@ TEST_F(FbtreeTest, SeekToValueSingleElement) {
     /* Before */
     fbtreeInitIterator(&it, fbt);
     sds before = createString("aaa");
-    fbtreeSeekToValue(fbt, before, &it);
+    fbtreeSeekToValue(before, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "middle", 7), 0);
     sdsfree(before);
@@ -2334,7 +2397,7 @@ TEST_F(FbtreeTest, SeekToValueSingleElement) {
     /* After */
     fbtreeInitIterator(&it, fbt);
     sds after = createString("zzz");
-    fbtreeSeekToValue(fbt, after, &it);
+    fbtreeSeekToValue(after, &it);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
     sdsfree(after);
 }
@@ -2352,7 +2415,7 @@ TEST_F(FbtreeTest, SeekToValueSharedPrefix) {
     /* Exact match within shared-prefix group */
     fbtreeInitIterator(&it, fbt);
     sds seek_val = createString("XXXXXXXXcharlie");
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "XXXXXXXXcharlie", 16), 0);
     sdsfree(seek_val);
@@ -2360,7 +2423,7 @@ TEST_F(FbtreeTest, SeekToValueSharedPrefix) {
     /* Between two shared-prefix elements */
     fbtreeInitIterator(&it, fbt);
     seek_val = createString("XXXXXXXXcat");
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "XXXXXXXXcharlie", 16), 0);
     sdsfree(seek_val);
@@ -2368,7 +2431,7 @@ TEST_F(FbtreeTest, SeekToValueSharedPrefix) {
     /* Prev from that position should return bravo */
     fbtreeInitIterator(&it, fbt);
     seek_val = createString("XXXXXXXXcat");
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreePrev(&it, &pos));
     EXPECT_EQ(memcmp(pos, "XXXXXXXXbravo", 14), 0);
     sdsfree(seek_val);
@@ -2387,25 +2450,25 @@ TEST_F(FbtreeTest, SeekToValueDeepTree) {
     const_sds pos;
 
     sds seek_mid = createBase26TestString("val_", "", count / 2, 4);
-    fbtreeSeekToValue(fbt, seek_mid, &it);
+    fbtreeSeekToValue(seek_mid, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(sdscmp(pos, seek_mid), 0);
     sdsfree(seek_mid);
 
     sds seek_near_end = createBase26TestString("val_", "", count - 5, 4);
-    fbtreeSeekToValue(fbt, seek_near_end, &it);
+    fbtreeSeekToValue(seek_near_end, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(sdscmp(pos, seek_near_end), 0);
     sdsfree(seek_near_end);
 
     sds seek_first = createBase26TestString("val_", "", 0, 4);
-    fbtreeSeekToValue(fbt, seek_first, &it);
+    fbtreeSeekToValue(seek_first, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(sdscmp(pos, seek_first), 0);
     sdsfree(seek_first);
 
     sds seek_past = createString("zzz_past_end");
-    fbtreeSeekToValue(fbt, seek_past, &it);
+    fbtreeSeekToValue(seek_past, &it);
     EXPECT_FALSE(fbtreeNext(&it, &pos));
     sdsfree(seek_past);
 }
@@ -2425,7 +2488,7 @@ TEST_F(FbtreeTest, SeekToValueThenIterate) {
 
     /* Forward from seek position */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     for (int i = 100; i < count; i++) {
         snprintf(buf, sizeof(buf), "item_%03d", i);
         ASSERT_TRUE(fbtreeNext(&it, &pos));
@@ -2435,7 +2498,7 @@ TEST_F(FbtreeTest, SeekToValueThenIterate) {
 
     /* Backward from seek position */
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     for (int i = 99; i >= 0; i--) {
         snprintf(buf, sizeof(buf), "item_%03d", i);
         ASSERT_TRUE(fbtreePrev(&it, &pos));
@@ -2511,7 +2574,7 @@ TEST_F(FbtreeTest, SeekToValuePropertyForwardPositioning) {
 
         fbtreeIterator it;
         fbtreeInitIterator(&it, tree);
-        fbtreeSeekToValue(tree, seek_val, &it);
+        fbtreeSeekToValue(seek_val, &it);
 
         const_sds pos;
         bool got_next = fbtreeNext(&it, &pos);
@@ -2596,7 +2659,7 @@ TEST_F(FbtreeTest, SeekToValuePropertyReversePositioning) {
 
         fbtreeIterator it;
         fbtreeInitIterator(&it, tree);
-        fbtreeSeekToValue(tree, seek_val, &it);
+        fbtreeSeekToValue(seek_val, &it);
 
         const_sds pos;
         bool got_prev = fbtreePrev(&it, &pos);
@@ -2676,7 +2739,7 @@ TEST_F(FbtreeTest, SeekToValuePropertySharedPrefixDiscrimination) {
 
         fbtreeIterator it;
         fbtreeInitIterator(&it, tree);
-        fbtreeSeekToValue(tree, seek_val, &it);
+        fbtreeSeekToValue(seek_val, &it);
 
         const_sds pos;
         bool got_next = fbtreeNext(&it, &pos);
@@ -2694,7 +2757,7 @@ TEST_F(FbtreeTest, SeekToValuePropertySharedPrefixDiscrimination) {
                 << ", expected=" << expected << ", num_elements=" << num_elements << ")";
 
             fbtreeInitIterator(&it, tree);
-            fbtreeSeekToValue(tree, seek_val, &it);
+            fbtreeSeekToValue(seek_val, &it);
             const_sds prev_pos;
             bool got_prev = fbtreePrev(&it, &prev_pos);
             if (got_prev) {
@@ -4446,7 +4509,7 @@ static unsigned long naiveDeleteRangeByScore(fbtreeIndex *fbt,
     std::vector<const_sds> to_delete;
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToScore(fbt, min_score, &it);
+    fbtreeSeekToScore(min_score, &it);
 
     const_sds pos;
     while (fbtreeNext(&it, &pos)) {
@@ -4481,7 +4544,7 @@ static unsigned long naiveDeleteRangeByValue(fbtreeIndex *fbt,
     std::vector<const_sds> to_delete;
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, min_val, &it);
+    fbtreeSeekToValue(min_val, &it);
 
     const_sds pos;
     while (fbtreeNext(&it, &pos)) {
@@ -4852,7 +4915,7 @@ TEST_F(FbtreeTest, LookupWithParentPrefixExceedingChildPrefix) {
      * the parent's prefix being "60" (longer than child's prefix) */
     sds seek_val = createString("59_000000");
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "59_000000", 10), 0);
     sdsfree(seek_val);
@@ -4860,7 +4923,7 @@ TEST_F(FbtreeTest, LookupWithParentPrefixExceedingChildPrefix) {
     /* Seek to something between "59" and "60" */
     seek_val = createString("59_zzzzzz");
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "60_", 3), 0);
     sdsfree(seek_val);
@@ -4923,7 +4986,7 @@ TEST_F(FbtreeTest, LookupAfterPrefixGrowthFromBulkDelete) {
     sds seek_val = createString("prefix_050000");
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
-    fbtreeSeekToValue(fbt, seek_val, &it);
+    fbtreeSeekToValue(seek_val, &it);
     const_sds pos;
     ASSERT_TRUE(fbtreeNext(&it, &pos));
     EXPECT_EQ(memcmp(pos, "prefix_050000", 14), 0);
@@ -5049,7 +5112,7 @@ TEST_F(FbtreeTest, PropertySeekCorrectAfterRangeDelete) {
             sds seek_val = sdsnewlen(remaining[i].data(), remaining[i].size());
             fbtreeIterator it;
             fbtreeInitIterator(&it, tree);
-            fbtreeSeekToValue(tree, seek_val, &it);
+            fbtreeSeekToValue(seek_val, &it);
             const_sds pos;
             ASSERT_TRUE(fbtreeNext(&it, &pos))
                 << "iter=" << iter << " seek failed for element " << i;
@@ -5063,7 +5126,7 @@ TEST_F(FbtreeTest, PropertySeekCorrectAfterRangeDelete) {
         {
             fbtreeIterator it;
             fbtreeInitIterator(&it, tree);
-            fbtreeSeekToValue(tree, before, &it);
+            fbtreeSeekToValue(before, &it);
             const_sds pos;
             ASSERT_TRUE(fbtreeNext(&it, &pos))
                 << "iter=" << iter << " seek before first element failed";
