@@ -153,7 +153,8 @@ BENCHMARK_DEFINE_F(Fbtree_Cold, SeekToScore)
         size_t t = cache->access_order[tree_idx++ % num_trees];
         size_t idx = rng() % item_count;
         fbtreeIterator iter;
-        fbtreeSeekToScore(cache->trees[t].fbt, cache->trees[t].strs[idx], &iter);
+        fbtreeInitIterator(&iter, cache->trees[t].fbt);
+        fbtreeSeekToScore(cache->trees[t].strs[idx], &iter);
         benchmark::DoNotOptimize(iter);
     }
     state.SetItemsProcessed(state.iterations());

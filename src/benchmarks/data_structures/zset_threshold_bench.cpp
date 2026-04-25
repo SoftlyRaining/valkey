@@ -413,7 +413,8 @@ static void BM_Zset_Fbtree_Cold_SeekToScore(benchmark::State &state) {
         fbtreeIndex *fbt = collections[idx % num_collections];
         double score = (double)(idx % count);
         fbtreeIterator iter;
-        fbtreeSeekToScore(fbt, (const char *)&score, &iter);
+        fbtreeInitIterator(&iter, fbt);
+        fbtreeSeekToScore((const char *)&score, &iter);
         benchmark::DoNotOptimize(iter);
         idx++;
     }

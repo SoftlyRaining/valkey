@@ -52,7 +52,7 @@ static constexpr size_t kItemCount = 10'000;
 static constexpr size_t kFixedItemSize = 32;
 
 static uint64_t hashCallback(const void *key) {
-    return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
+    return dictGenHashFunction((const char *)key, strlen((const char *)key));
 }
 
 static int dictCompareCallback(const void *key1, const void *key2) {

@@ -380,7 +380,8 @@ DEFINE_LOOKUP_BENCHMARK(Fbtree_SeqBuild, RankLookup, auto s = fbtreeGetAtRank(fb
                         benchmark::DoNotOptimize(s))
 
 DEFINE_LOOKUP_BENCHMARK(Fbtree_SeqBuild, SeekToScore, fbtreeIterator iter;
-                        fbtreeSeekToScore(fbt, (*strs)[idx], &iter);
+                        fbtreeInitIterator(&iter, fbt);
+                        fbtreeSeekToScore((*strs)[idx], &iter);
                         benchmark::DoNotOptimize(iter))
 
 DEFINE_LOOKUP_BENCHMARK(Fbtree_SeqBuild, GetRankOfItem, auto rank = fbtreeGetRankOfItem(fbt, (*items)[idx]);
@@ -418,7 +419,8 @@ DEFINE_LOOKUP_BENCHMARK(Fbtree_RandBuild, RankLookup, auto s = fbtreeGetAtRank(f
                         benchmark::DoNotOptimize(s))
 
 DEFINE_LOOKUP_BENCHMARK(Fbtree_RandBuild, SeekToScore, fbtreeIterator iter;
-                        fbtreeSeekToScore(fbt, (*strs)[idx], &iter);
+                        fbtreeInitIterator(&iter, fbt);
+                        fbtreeSeekToScore((*strs)[idx], &iter);
                         benchmark::DoNotOptimize(iter))
 
 DEFINE_LOOKUP_BENCHMARK(Fbtree_RandBuild, GetRankOfItem, auto rank = fbtreeGetRankOfItem(fbt, (*items)[idx]);
