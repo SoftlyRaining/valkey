@@ -1,11 +1,12 @@
 #ifndef SKIPLIST_INTERNAL_H
 #define SKIPLIST_INTERNAL_H
 
-/* Internal skiplist helpers and additional declarations beyond what server.h
- * exposes.  The struct definitions (zskiplistNode, zskiplist) remain in
- * server.h for now since many files dereference them directly.
+/* Internal skiplist node helpers shared between t_zset.c and
+ * skiplist_ordered_index.c.  Not for use outside the skiplist
+ * implementation.
  *
- * Callers must include server.h before this header. */
+ * Callers must include server.h before this header for the full
+ * definitions of zrangespec and zlexrangespec. */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -16,18 +17,20 @@
 #endif
 #define ZSKIPLIST_MAX_SEARCH 10
 
-/* Skiplist iterator. Can be stack-allocated or heap-allocated. */
+/* Skiplist iterator — used directly by the skiplist implementation and
+ * cast from OrderedIndexIterator in skiplist_ordered_index.c. */
 typedef struct {
     zskiplist *zsl;      /* The skiplist being iterated */
     zskiplistNode *node; /* Current node (NULL before first call) */
 } zslIter;
 
-/* Node creation and insertion helpers */
+/* Node creation and insertion (used by skiplist_ordered_index.c for detached items) */
 zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);
 int zslRandomLevel(void);
 zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 
 /* Additional modification functions */
+void zslDelete(zskiplist *zsl, zskiplistNode *node);
 zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
 void zslFreeNode(zskiplistNode *node);
 zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
@@ -50,7 +53,7 @@ void zslSeekToRank(zslIter *iter, unsigned long rank);
 void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset);
 void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 
-/* Internal unlink helper for range deletion */
+/* Internal unlink helper (used by skiplist_ordered_index.c for range deletion) */
 void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
 
 /* Level-0 span stores the node height, so span accessors treat it specially. */
