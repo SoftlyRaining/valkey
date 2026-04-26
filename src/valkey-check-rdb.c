@@ -29,6 +29,7 @@
 
 #include "mt19937-64.h"
 #include "server.h"
+#include "skiplist_internal.h"
 #include "rdb.h"
 #include "module.h"
 #include "hdr_histogram.h"

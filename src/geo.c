@@ -32,6 +32,7 @@
 #include "geohash_helper.h"
 #include "debugmacro.h"
 #include "pqsort.h"
+#include "skiplist_internal.h"
 
 /* Things exported from t_zset.c only for geo.c, since it is the only other
  * part of the server that requires close zset introspection. */
@@ -307,7 +308,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = ((zskiplist *)zs->zidx);
         zskiplistNode *ln;
 
         if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
@@ -824,7 +825,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert(zs->zsl, score, gp->member);
+            znode = zslInsert(((zskiplist *)zs->zidx), score, gp->member);
             serverAssert(hashtableAdd(zs->ht, znode));
             sdsfree(gp->member);
             gp->member = NULL;

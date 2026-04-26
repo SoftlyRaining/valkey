@@ -30,6 +30,7 @@
 
 
 #include "server.h"
+#include "skiplist_internal.h"
 #include "pqsort.h" /* Partial qsort for SORT+LIMIT */
 #include <math.h>   /* isnan() */
 #include "cluster.h"
@@ -417,7 +418,7 @@ void sortCommandGeneric(client *c, int readonly) {
          * way, just getting the required range, as an optimization. */
 
         zset *zs = objectGetVal(sortval);
-        zskiplist *zsl = zs->zsl;
+        zskiplist *zsl = ((zskiplist *)zs->zidx);
         zskiplistNode *ln;
         sds sdsele;
         int rangelen = vectorlen;
