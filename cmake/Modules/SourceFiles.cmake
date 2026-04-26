@@ -82,6 +82,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/allocator_defrag.c
     ${CMAKE_SOURCE_DIR}/src/defrag.c
     ${CMAKE_SOURCE_DIR}/src/siphash.c
+    ${CMAKE_SOURCE_DIR}/src/skiplist_ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/rax.c
     ${CMAKE_SOURCE_DIR}/src/t_stream.c
     ${CMAKE_SOURCE_DIR}/src/listpack.c
