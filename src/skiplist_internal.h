@@ -8,14 +8,46 @@
  * Callers must include server.h before this header for the full
  * definitions of zrangespec and zlexrangespec. */
 
+#include "sds.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef ZSKIPLIST_MAXLEVEL
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
-#endif
 #define ZSKIPLIST_MAX_SEARCH 10
+
+/* ZSETs use a specialized version of Skiplists */
+typedef struct zskiplistNode {
+    union {
+        double score;         /* Sorting score for node ordering. */
+        unsigned long length; /* Number of elements in the skiplist. */
+    };
+    union {
+        struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal. */
+        struct zskiplistNode *tail;     /* Tail element of the skiplist. */
+    };
+    struct zskiplistLevel {
+        struct zskiplistNode *forward;
+        /* At each level we keep the span, which is the number of elements which are on the "subtree"
+         * from this node at this level to the next node at the same level.
+         * One exception is the value at level 0. In level 0 the span can only be 1 or 0 (in case the last elements in the list)
+         * So we use it in order to hold the height of the node, which is the number of levels. */
+        unsigned long span;
+    } level[1]; /* Flexible array member - actual levels determined at node creation. */
+    /* For non-header nodes, after the level[], sds header length (1 byte) and an embedded sds element are stored. */
+} zskiplistNode;
+
+/* The header node does not store actual data (no score, no backward pointer,
+ * and its node height is fixed at ZSKIPLIST_MAXLEVEL).
+ * To save memory, we reuse the memory space of these fields in the header node to store:
+ *   - skiplist length (number of elements)
+ *   - tail pointer to the last element
+ *   - maximum current level of the skiplist
+ * For detailed memory layout, refer to the zskiplistNode struct definition. */
+typedef struct zskiplist {
+    zskiplistNode header;
+} zskiplist;
 
 /* Skiplist iterator — used directly by the skiplist implementation and
  * cast from OrderedIndexIterator in skiplist_ordered_index.c. */
@@ -24,22 +56,32 @@ typedef struct {
     zskiplistNode *node; /* Current node (NULL before first call) */
 } zslIter;
 
-/* Node creation and insertion (used by skiplist_ordered_index.c for detached items) */
-zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);
-int zslRandomLevel(void);
-zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
+/* Lifecycle */
+zskiplist *zslCreate(void);
+void zslFree(zskiplist *zsl);
+size_t zslGetAllocSize(void);
 
-/* Additional modification functions */
+/* Skiplist structure accessors */
+int zslGetHeight(const zskiplist *zsl);
+unsigned long zslGetLength(const zskiplist *zsl);
+zskiplistNode *zslGetHeader(zskiplist *zsl);
+zskiplistNode *zslGetTail(const zskiplist *zsl);
+void zslSetTail(zskiplist *zsl, zskiplistNode *tail);
+zskiplistNode *zslGetFirst(const zskiplist *zsl);
+
+/* Modification */
+zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 void zslDelete(zskiplist *zsl, zskiplistNode *node);
 zskiplistNode *zslDetachNode(zskiplist *zsl, zskiplistNode *node);
 void zslFreeNode(zskiplistNode *node);
 zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore);
 
-/* Additional query functions */
-zskiplistNode *zslGetFirst(const zskiplist *zsl);
-double zslGetScore(const zskiplistNode *node);
-unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
+/* Query */
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
+unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node);
+sds zslGetNodeElement(const zskiplistNode *x);
+double zslGetScore(const zskiplistNode *node);
+zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 zskiplistNode *zslNthInLexRange(zskiplist *zsl, zlexrangespec *range, long n);
 
 /* Iterator */
@@ -52,6 +94,11 @@ bool zslPrev(zslIter *iter, zskiplistNode **nodeptr);
 void zslSeekToRank(zslIter *iter, unsigned long rank);
 void zslSeekToScoreRange(zslIter *iter, double min, double max, int min_ex, int max_ex, long offset);
 void zslSeekToLexRange(zslIter *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
+
+/* Node creation and insertion (used by skiplist_ordered_index.c for detached items) */
+zskiplistNode *zslCreateNode(int height, double score, const char *ele, size_t ele_len);
+int zslRandomLevel(void);
+zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node);
 
 /* Internal unlink helper (used by skiplist_ordered_index.c for range deletion) */
 void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update);
