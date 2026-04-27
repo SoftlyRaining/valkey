@@ -3361,16 +3361,6 @@ int zsetScoreLteMax(double value, zrangespec *spec);
 int zsetLexGteMin(const char *value, size_t value_len, zlexrangespec *spec);
 int zsetLexLteMax(const char *value, size_t value_len, zlexrangespec *spec);
 
-/* Backward-compatible aliases — removed in later PRs as callers are converted. */
-#define zslValueGteMin zsetScoreGteMin
-#define zslValueLteMax zsetScoreLteMax
-static inline int zslLexValueGteMin(sds value, zlexrangespec *spec) {
-    return zsetLexGteMin(value, sdslen(value), spec);
-}
-static inline int zslLexValueLteMax(sds value, zlexrangespec *spec) {
-    return zsetLexLteMax(value, sdslen(value), spec);
-}
-
 /* flags for incrCommandFailedCalls */
 #define ERROR_COMMAND_REJECTED (1 << 0) /* Indicate to update the command rejected stats */
 #define ERROR_COMMAND_FAILED (1 << 1)   /* Indicate to update the command failed stats */

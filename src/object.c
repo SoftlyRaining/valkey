@@ -30,10 +30,10 @@
 
 #include "hashtable.h"
 #include "server.h"
-#include "skiplist_internal.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "ordered_index.h"
 #include "util.h"
 #include "vset.h"
 #include "zmalloc.h"
@@ -579,7 +579,7 @@ void freeZsetObject(robj *o) {
     case OBJ_ENCODING_SKIPLIST:
         zs = objectGetVal(o);
         hashtableRelease(zs->ht);
-        zslFree(((zskiplist *)zs->zidx));
+        orderedIndexFree(zs->zidx);
         zfree(zs);
         break;
     case OBJ_ENCODING_LISTPACK: zfree(objectGetVal(o)); break;
@@ -715,17 +715,11 @@ void dismissSetObject(robj *o, size_t size_hint) {
 void dismissZsetObject(robj *o, size_t size_hint) {
     if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(o);
-        zskiplist *zsl = ((zskiplist *)zs->zidx);
-        serverAssert(zslGetLength(zsl) != 0);
+        serverAssert(orderedIndexLength(zs->zidx) != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / zslGetLength(zsl) >= server.page_size) {
-            zskiplistNode *zn = zslGetTail(zsl);
-            while (zn != NULL) {
-                zskiplistNode *next = zn->backward;
-                dismissMemory(zn, 0);
-                zn = next;
-            }
+        if (size_hint / orderedIndexLength(zs->zidx) >= server.page_size) {
+            orderedIndexDismissMemory(zs->zidx);
         }
 
         dismissHashtable(zs->ht);
@@ -1239,16 +1233,8 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize += zmalloc_size(objectGetVal(o));
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             hashtable *ht = ((zset *)objectGetVal(o))->ht;
-            zskiplist *zsl = (zskiplist *)((zset *)objectGetVal(o))->zidx;
-            zskiplistNode *zheader = zslGetHeader(zsl);
-            zskiplistNode *znode = zheader->level[0].forward;
-            asize += sizeof(zset) + zslGetAllocSize() + hashtableMemUsage(ht);
-            while (znode != NULL && samples < sample_size) {
-                elesize += zmalloc_size(znode);
-                samples++;
-                znode = znode->level[0].forward;
-            }
-            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            OrderedIndex *idx = ((zset *)objectGetVal(o))->zidx;
+            asize += sizeof(zset) + orderedIndexEstimateMemory(idx, sample_size) + hashtableMemUsage(ht);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
