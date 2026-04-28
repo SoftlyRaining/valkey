@@ -46,6 +46,10 @@ static std::deque<FbtreeColdCache> g_fbtree_delete_cache;
 static std::deque<FbtreeColdCache> g_fbtree_insert_cache;
 static std::deque<FbtreeColdCache> g_fbtree_pophead_cache;
 static std::deque<FbtreeColdCache> g_fbtree_poptail_cache;
+static std::deque<FbtreeColdCache> g_fbtree_rangedelrank_cache;
+static std::deque<FbtreeColdCache> g_fbtree_rangedelscore_cache;
+static std::deque<FbtreeColdCache> g_fbtree_mixed_cache;
+static std::deque<FbtreeColdCache> g_fbtree_scoreupdate_cache;
 
 /* Clean up all caches at program exit */
 static struct FbtreeColdCacheCleanup {
@@ -55,6 +59,10 @@ static struct FbtreeColdCacheCleanup {
         g_fbtree_insert_cache.clear();
         g_fbtree_pophead_cache.clear();
         g_fbtree_poptail_cache.clear();
+        g_fbtree_rangedelrank_cache.clear();
+        g_fbtree_rangedelscore_cache.clear();
+        g_fbtree_mixed_cache.clear();
+        g_fbtree_scoreupdate_cache.clear();
     }
 } g_fbtree_cold_cache_cleanup;
 
@@ -329,6 +337,171 @@ BENCHMARK_DEFINE_F(Fbtree_Cold_PopTail, Pop)
     state.SetItemsProcessed(state.iterations());
 }
 
+/* ============ Range Delete by Rank Benchmark ============ */
+
+class Fbtree_Cold_RangeDeleteRank : public Fbtree_Cold_Mutating<g_fbtree_rangedelrank_cache> {};
+
+BENCHMARK_DEFINE_F(Fbtree_Cold_RangeDeleteRank, Op)
+(benchmark::State &state) {
+    size_t tree_idx = 0;
+    size_t range_size = item_count / 10;
+    unsigned long start_rank = (unsigned long)(item_count * 45 / 100);
+    unsigned long end_rank = start_rank + range_size - 1;
+    for (auto _ : state) {
+        size_t t = cache->access_order[tree_idx++ % num_trees];
+        auto &tree = cache->trees[t];
+        unsigned long deleted = fbtreeDeleteRangeByRank(tree.fbt, start_rank, end_rank, NULL, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        for (size_t i = 0; i < range_size; i++)
+            tree.items[start_rank + i] = fbtreeInsert(tree.fbt, sdsdup(tree.strs[start_rank + i]));
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+}
+
+/* ============ Range Delete by Score Benchmark ============ */
+
+class Fbtree_Cold_RangeDeleteScore : public Fbtree_Cold_Mutating<g_fbtree_rangedelscore_cache> {};
+
+BENCHMARK_DEFINE_F(Fbtree_Cold_RangeDeleteScore, Op)
+(benchmark::State &state) {
+    size_t tree_idx = 0;
+    size_t range_size = item_count / 10;
+    size_t start_idx = item_count * 45 / 100;
+    size_t end_idx = start_idx + range_size - 1;
+
+    unsigned char min_score[8], max_score[8];
+    encodeScoreToBytes((double)start_idx, min_score);
+    encodeScoreToBytes((double)end_idx, max_score);
+
+    for (auto _ : state) {
+        size_t t = cache->access_order[tree_idx++ % num_trees];
+        auto &tree = cache->trees[t];
+        unsigned long deleted = fbtreeDeleteRangeByScore(tree.fbt, (const char *)min_score, (const char *)max_score, 0, 0, NULL, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        for (size_t i = 0; i < range_size; i++)
+            tree.items[start_idx + i] = fbtreeInsert(tree.fbt, sdsdup(tree.strs[start_idx + i]));
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+}
+
+/* ============ Partial Range Scan Benchmark ============ */
+
+BENCHMARK_DEFINE_F(Fbtree_Cold, PartialScan)
+(benchmark::State &state) {
+    std::mt19937 rng(123);
+    size_t tree_idx = 0;
+    unsigned char score_buf[8];
+    for (auto _ : state) {
+        size_t t = cache->access_order[tree_idx++ % num_trees];
+        size_t start = rng() % (item_count - 100);
+        encodeScoreToBytes((double)start, score_buf);
+
+        fbtreeIterator iter;
+        fbtreeInitIterator(&iter, cache->trees[t].fbt);
+        fbtreeSeekToScore((const char *)score_buf, &iter);
+
+        const_sds pos;
+        for (int i = 0; i < 100; i++) {
+            fbtreeNext(&iter, &pos);
+            benchmark::DoNotOptimize(pos);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() * 100);
+}
+
+/* ============ Mixed Workload Benchmark ============ */
+
+class Fbtree_Cold_Mixed : public Fbtree_Cold_Mutating<g_fbtree_mixed_cache> {};
+
+BENCHMARK_DEFINE_F(Fbtree_Cold_Mixed, Op)
+(benchmark::State &state) {
+    const int cycle_ops = 100;
+    int num_reads = 50;
+    int num_writes = cycle_ops - num_reads;
+    int num_deletes = num_writes / 2;
+    int num_inserts = num_writes - num_deletes;
+
+    std::mt19937 rng(123);
+    size_t tree_idx = 0;
+    std::vector<char> buf(cache->item_size);
+
+    for (auto _ : state) {
+        size_t t = cache->access_order[tree_idx++ % num_trees];
+        auto &tree = cache->trees[t];
+
+        /* Lookups */
+        for (int i = 0; i < num_reads; i++) {
+            size_t rank = rng() % item_count;
+            auto s = fbtreeGetAtRank(tree.fbt, rank);
+            benchmark::DoNotOptimize(s);
+        }
+
+        /* Deletes */
+        std::vector<size_t> del_indices(num_deletes);
+        for (int i = 0; i < num_deletes; i++) {
+            size_t idx = rng() % item_count;
+            del_indices[i] = idx;
+            if (tree.items[idx]) {
+                fbtreeDelete(tree.fbt, tree.items[idx]);
+                tree.items[idx] = nullptr;
+            }
+        }
+
+        /* Inserts to balance deletes */
+        double next_score = (double)(item_count * 2);
+        for (int i = 0; i < num_inserts; i++) {
+            encodeScoreToBytes(next_score + i, (unsigned char *)buf.data());
+            memset(buf.data() + 8, 'x', cache->item_size - 8 - 1);
+            buf[cache->item_size - 1] = '\0';
+            fbtreeInsert(tree.fbt, sdsnewlen(buf.data(), cache->item_size));
+        }
+
+        state.PauseTiming();
+        /* Restore: rebuild the tree from scratch to ensure clean state */
+        fbtreeFree(tree.fbt);
+        tree.fbt = fbtreeCreate();
+        for (size_t i = 0; i < item_count; i++)
+            tree.items[i] = fbtreeInsert(tree.fbt, sdsdup(tree.strs[i]));
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * cycle_ops);
+}
+
+/* ============ Score Update Benchmark ============ */
+
+class Fbtree_Cold_ScoreUpdate : public Fbtree_Cold_Mutating<g_fbtree_scoreupdate_cache> {};
+
+BENCHMARK_DEFINE_F(Fbtree_Cold_ScoreUpdate, Op)
+(benchmark::State &state) {
+    std::mt19937 rng(42);
+    size_t tree_idx = 0;
+    std::vector<char> buf(cache->item_size);
+    for (auto _ : state) {
+        size_t t = cache->access_order[tree_idx++ % num_trees];
+        auto &tree = cache->trees[t];
+        size_t idx = rng() % item_count;
+
+        /* Extract element bytes before delete (tree frees the sds) */
+        state.PauseTiming();
+        memcpy(buf.data() + 8, tree.items[idx] + 8, cache->item_size - 8);
+        double new_score = (double)(rng() % item_count);
+        encodeScoreToBytes(new_score, (unsigned char *)buf.data());
+        sds new_packed = sdsnewlen(buf.data(), cache->item_size);
+        state.ResumeTiming();
+
+        fbtreeDelete(tree.fbt, tree.items[idx]);
+        tree.items[idx] = fbtreeInsert(tree.fbt, new_packed);
+        benchmark::DoNotOptimize(tree.items[idx]);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
 /* ============ Register Benchmarks ============ */
 
 #define COLD_BENCH_ARGS()  \
@@ -342,6 +515,7 @@ BENCHMARK_REGISTER_F(Fbtree_Cold, RankLookup)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Fbtree_Cold, SeekToScore)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Fbtree_Cold, GetRankOfItem)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Fbtree_Cold, IterateForward)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Fbtree_Cold, PartialScan)->COLD_BENCH_ARGS();
 
 /* Mutating benchmarks - each uses its own cache */
 BENCHMARK_REGISTER_F(Fbtree_Cold_Insert, Random)->COLD_BENCH_ARGS();
@@ -349,3 +523,7 @@ BENCHMARK_REGISTER_F(Fbtree_Cold_Insert, Append)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Fbtree_Cold_Delete, Random)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Fbtree_Cold_PopHead, Pop)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Fbtree_Cold_PopTail, Pop)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Fbtree_Cold_RangeDeleteRank, Op)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Fbtree_Cold_RangeDeleteScore, Op)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Fbtree_Cold_Mixed, Op)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Fbtree_Cold_ScoreUpdate, Op)->COLD_BENCH_ARGS();

@@ -455,6 +455,227 @@ BENCHMARK_DEFINE_F(Skiplist_RandBuild, IterateBackward)
     state.SetItemsProcessed(state.iterations() * item_count);
 }
 
+/* ============ Range Delete by Rank Benchmark ============ */
+
+static void BM_Skiplist_RangeDeleteByRank(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto elems = createElements(count, size, false);
+
+    zskiplist *zsl = zslCreate();
+    for (size_t i = 0; i < count; i++)
+        zslInsert(zsl, (double)i, elems[i]);
+
+    size_t range_size = count / 10;
+    unsigned long start_rank = (unsigned long)(count * 45 / 100);
+
+    /* Pre-save scores and elements for restore */
+    std::vector<double> saved_scores(range_size);
+    std::vector<sds> saved_elems(range_size);
+    for (size_t i = 0; i < range_size; i++) {
+        saved_scores[i] = (double)(start_rank + i);
+        saved_elems[i] = elems[start_rank + i];
+    }
+
+    /* zslDeleteRangeByRank uses 1-based inclusive ranks */
+    unsigned long zsl_start = start_rank + 1;
+    unsigned long zsl_end = start_rank + range_size;
+
+    for (auto _ : state) {
+        unsigned long deleted = zslDeleteRangeByRank(zsl, zsl_start, zsl_end, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        /* Restore deleted elements */
+        for (size_t i = 0; i < range_size; i++)
+            zslInsert(zsl, saved_scores[i], saved_elems[i]);
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+    zslFree(zsl);
+    freeElements(elems);
+}
+
+/* ============ Range Delete by Score Benchmark ============ */
+
+static void BM_Skiplist_RangeDeleteByScore(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto elems = createElements(count, size, false);
+
+    zskiplist *zsl = zslCreate();
+    for (size_t i = 0; i < count; i++)
+        zslInsert(zsl, (double)i, elems[i]);
+
+    size_t range_size = count / 10;
+    size_t start_idx = count * 45 / 100;
+    size_t end_idx = start_idx + range_size - 1;
+    double min_score = (double)start_idx;
+    double max_score = (double)end_idx;
+
+    /* Pre-save scores and elements for restore */
+    std::vector<double> saved_scores(range_size);
+    std::vector<sds> saved_elems(range_size);
+    for (size_t i = 0; i < range_size; i++) {
+        saved_scores[i] = (double)(start_idx + i);
+        saved_elems[i] = elems[start_idx + i];
+    }
+
+    for (auto _ : state) {
+        zrangespec range = {min_score, max_score, 0, 0};
+        unsigned long deleted = zslDeleteRangeByScore(zsl, &range, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        /* Restore deleted elements */
+        for (size_t i = 0; i < range_size; i++)
+            zslInsert(zsl, saved_scores[i], saved_elems[i]);
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+    zslFree(zsl);
+    freeElements(elems);
+}
+
+/* ============ Partial Range Scan Benchmark ============ */
+
+static void BM_Skiplist_PartialRangeScan(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto elems = createElements(count, size, false);
+
+    zskiplist *zsl = zslCreate();
+    for (size_t i = 0; i < count; i++)
+        zslInsert(zsl, (double)i, elems[i]);
+
+    std::mt19937 rng(123);
+    for (auto _ : state) {
+        size_t start = rng() % (count - 100);
+        zrangespec range = {(double)start, (double)(count - 1), 0, 0};
+        zskiplistNode *node = zslNthInRange(zsl, &range, 0, nullptr);
+        benchmark::DoNotOptimize(node);
+
+        zskiplistIterator iter;
+        zslInitIterator(&iter, zsl);
+        zslSeekToRank(&iter, zslGetRank(zsl, node));
+        zskiplistNode *n;
+        for (int i = 0; i < 99 && zslNext(&iter, &n); i++) {
+            benchmark::DoNotOptimize(n);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() * 100);
+    zslFree(zsl);
+    freeElements(elems);
+}
+
+/* ============ Mixed Workload Benchmark ============ */
+
+static void BM_Skiplist_MixedWorkload(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    int read_pct = (int)state.range(2);
+    auto elems = createElements(count, size, false);
+
+    zskiplist *zsl = zslCreate();
+    std::vector<zskiplistNode *> nodes(count);
+    std::vector<double> scores(count);
+    for (size_t i = 0; i < count; i++) {
+        scores[i] = (double)i;
+        nodes[i] = zslInsert(zsl, scores[i], elems[i]);
+    }
+
+    /* Per cycle: read_pct lookups, remaining split 50/50 insert/delete */
+    const int cycle_ops = 100;
+    int num_reads = read_pct;
+    int num_writes = cycle_ops - num_reads;
+    int num_deletes = num_writes / 2;
+    int num_inserts = num_writes - num_deletes;
+
+    std::mt19937 rng(123);
+    double next_score = (double)count;
+
+    /* Pre-generate a shuffled delete order */
+    std::vector<size_t> delete_order(count);
+    std::iota(delete_order.begin(), delete_order.end(), 0);
+    std::shuffle(delete_order.begin(), delete_order.end(), rng);
+    size_t del_pos = 0;
+
+    size_t ele_size = size - sizeof(double);
+    std::vector<char> ele_buf(ele_size + 1);
+
+    for (auto _ : state) {
+        /* Lookups */
+        for (int i = 0; i < num_reads; i++) {
+            unsigned long rank = (rng() % count) + 1; /* 1-indexed */
+            auto *node = zslGetElementByRank(zsl, rank);
+            benchmark::DoNotOptimize(node);
+        }
+
+        /* Deletes */
+        for (int i = 0; i < num_deletes; i++) {
+            size_t idx = delete_order[del_pos++ % count];
+            zslDelete(zsl, nodes[idx]);
+            nodes[idx] = nullptr;
+        }
+
+        /* Inserts (to balance deletes and maintain stable size) */
+        del_pos -= num_deletes; /* rewind to re-use same slots */
+        for (int i = 0; i < num_inserts; i++) {
+            size_t idx = delete_order[(del_pos + i) % count];
+            snprintf(ele_buf.data(), ele_buf.size(), "%0*zu", (int)ele_size, idx);
+            sds new_ele = sdsnewlen(ele_buf.data(), ele_size);
+            double new_score = next_score++;
+            nodes[idx] = zslInsert(zsl, new_score, new_ele);
+            sdsfree(new_ele); /* zslInsert copies the element */
+            scores[idx] = new_score;
+        }
+        del_pos += num_inserts;
+    }
+    state.SetItemsProcessed(state.iterations() * cycle_ops);
+    zslFree(zsl);
+    freeElements(elems);
+}
+
+/* ============ Score Update Benchmark ============ */
+
+static void BM_Skiplist_ScoreUpdate(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto elems = createElements(count, size, false);
+
+    zskiplist *zsl = zslCreate();
+    std::vector<zskiplistNode *> nodes(count);
+    std::vector<double> scores(count);
+    for (size_t i = 0; i < count; i++) {
+        scores[i] = (double)i;
+        nodes[i] = zslInsert(zsl, scores[i], elems[i]);
+    }
+
+    std::vector<size_t> update_order(count);
+    std::iota(update_order.begin(), update_order.end(), 0);
+    std::mt19937 rng(42);
+    std::shuffle(update_order.begin(), update_order.end(), rng);
+
+    size_t pos = 0;
+    for (auto _ : state) {
+        size_t idx = update_order[pos++ % count];
+
+        /* Save element sds before delete (node is freed, element in elems[] stays valid) */
+        state.PauseTiming();
+        sds ele = elems[idx];
+        double new_score = (double)(rng() % count);
+        state.ResumeTiming();
+
+        zslDelete(zsl, nodes[idx]);
+        nodes[idx] = zslInsert(zsl, new_score, ele);
+        scores[idx] = new_score;
+        benchmark::DoNotOptimize(nodes[idx]);
+    }
+    state.SetItemsProcessed(state.iterations());
+    zslFree(zsl);
+    freeElements(elems);
+}
+
 /* ============ Register Benchmarks ============ */
 
 /* Insert benchmarks */
@@ -480,3 +701,31 @@ BENCHMARK_REGISTER_F(Skiplist_RandBuild, SeekToScore)->BENCH_ARGS_STANDARD();
 BENCHMARK_REGISTER_F(Skiplist_RandBuild, GetRankOfItem)->BENCH_ARGS_STANDARD();
 BENCHMARK_REGISTER_F(Skiplist_RandBuild, IterateForward)->BENCH_ARGS_STANDARD()->Iterations(1);
 BENCHMARK_REGISTER_F(Skiplist_RandBuild, IterateBackward)->BENCH_ARGS_STANDARD()->Iterations(1);
+
+/* Range delete benchmarks */
+BENCHMARK(BM_Skiplist_RangeDeleteByRank)->BENCH_ARGS_STANDARD();
+BENCHMARK(BM_Skiplist_RangeDeleteByScore)->BENCH_ARGS_STANDARD();
+
+/* Partial range scan benchmark */
+BENCHMARK(BM_Skiplist_PartialRangeScan)->BENCH_ARGS_STANDARD();
+
+/* Mixed workload benchmark — BENCH_ARGS_STANDARD × {20, 50, 80} read percentages */
+BENCHMARK(BM_Skiplist_MixedWorkload)
+    ->Args({1024, 24, 20})
+    ->Args({1024, 24, 50})
+    ->Args({1024, 24, 80})
+    ->Args({8192, 24, 20})
+    ->Args({8192, 24, 50})
+    ->Args({8192, 24, 80})
+    ->Args({65536, 24, 20})
+    ->Args({65536, 24, 50})
+    ->Args({65536, 24, 80})
+    ->Args({524288, 24, 20})
+    ->Args({524288, 24, 50})
+    ->Args({524288, 24, 80})
+    ->Args({4194304, 24, 20})
+    ->Args({4194304, 24, 50})
+    ->Args({4194304, 24, 80});
+
+/* Score update benchmark */
+BENCHMARK(BM_Skiplist_ScoreUpdate)->BENCH_ARGS_STANDARD();

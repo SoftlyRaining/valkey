@@ -86,6 +86,73 @@ def parse_benchmark_output(text: str) -> list[BenchmarkResult]:
             items_per_sec=ips,
         ))
 
+    # Pattern for range delete cold benchmarks:
+    # Fbtree_Cold_RangeDeleteRank/Op/128/24, Skiplist_Cold_RangeDeleteScore/Op/128/24
+    range_del_pattern = re.compile(
+        r"^(Fbtree|Skiplist)_Cold_(RangeDeleteRank|RangeDeleteScore)/\w+/(\d+)/\d+\s+"
+        r"([\d.]+)\s+ns\s+.*?items_per_second=([\d.]+)([kMG])?/s",
+        re.MULTILINE
+    )
+
+    for m in range_del_pattern.finditer(text):
+        struct, op, count, time_ns, ips, ips_unit = m.groups()
+        ips = float(ips)
+        if ips_unit == "k":
+            ips *= 1e3
+        elif ips_unit == "M":
+            ips *= 1e6
+        elif ips_unit == "G":
+            ips *= 1e9
+        results.append(BenchmarkResult(
+            structure=struct, operation=op,
+            item_count=int(count), time_ns=float(time_ns),
+            items_per_sec=ips,
+        ))
+
+    # Pattern for mixed cold benchmarks: Fbtree_Cold_Mixed/Op/128/24
+    mixed_cold_pattern = re.compile(
+        r"^(Fbtree|Skiplist)_Cold_Mixed/\w+/(\d+)/\d+\s+"
+        r"([\d.]+)\s+ns\s+.*?items_per_second=([\d.]+)([kMG])?/s",
+        re.MULTILINE
+    )
+
+    for m in mixed_cold_pattern.finditer(text):
+        struct, count, time_ns, ips, ips_unit = m.groups()
+        ips = float(ips)
+        if ips_unit == "k":
+            ips *= 1e3
+        elif ips_unit == "M":
+            ips *= 1e6
+        elif ips_unit == "G":
+            ips *= 1e9
+        results.append(BenchmarkResult(
+            structure=struct, operation="Mixed",
+            item_count=int(count), time_ns=float(time_ns),
+            items_per_sec=ips,
+        ))
+
+    # Pattern for score update cold benchmarks: Fbtree_Cold_ScoreUpdate/Op/128/24
+    score_update_cold_pattern = re.compile(
+        r"^(Fbtree|Skiplist)_Cold_ScoreUpdate/\w+/(\d+)/\d+\s+"
+        r"([\d.]+)\s+ns\s+.*?items_per_second=([\d.]+)([kMG])?/s",
+        re.MULTILINE
+    )
+
+    for m in score_update_cold_pattern.finditer(text):
+        struct, count, time_ns, ips, ips_unit = m.groups()
+        ips = float(ips)
+        if ips_unit == "k":
+            ips *= 1e3
+        elif ips_unit == "M":
+            ips *= 1e6
+        elif ips_unit == "G":
+            ips *= 1e9
+        results.append(BenchmarkResult(
+            structure=struct, operation="ScoreUpdate",
+            item_count=int(count), time_ns=float(time_ns),
+            items_per_sec=ips,
+        ))
+
     return results
 
 
@@ -278,12 +345,15 @@ def plot_cold_iterate(results: list[BenchmarkResult], filename: str):
 
 def plot_speedup(results: list[BenchmarkResult], filename: str):
     """Bar chart showing fbtree speedup over skiplist."""
-    operations = ["RankLookup", "SeekToScore", "GetRankOfItem", "IterateForward", "InsertRandom", "InsertAppend", "DeleteRandom", "PopHead", "PopTail"]
+    operations = ["RankLookup", "SeekToScore", "GetRankOfItem", "IterateForward",
+                  "InsertRandom", "InsertAppend", "DeleteRandom", "PopHead", "PopTail",
+                  "RangeDeleteRank", "RangeDeleteScore", "PartialScan",
+                  "Mixed", "ScoreUpdate"]
     sizes = [128, 1024, 8192, 65536]
     size_labels = ["128", "1K", "8K", "64K"]
     max_display = 5.0  # Truncate bars above this value
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
     x = np.arange(len(sizes))
     n_ops = len(operations)
     width = 0.8 / n_ops
@@ -316,9 +386,8 @@ def plot_speedup(results: list[BenchmarkResult], filename: str):
     ax.set_xticks(x)
     ax.set_xticklabels(size_labels)
     ax.set_ylim(0, max_display * 1.15)  # Room for annotations
-    ax.legend(fontsize=9, loc="upper center", ncol=len(operations), bbox_to_anchor=(0.5, -0.12))
+    ax.legend(fontsize=9, loc="center left", bbox_to_anchor=(1.02, 0.5))
     ax.grid(True, alpha=0.3, axis="y")
-    fig.subplots_adjust(bottom=0.2)
 
     plt.tight_layout()
     out = SCRIPT_DIR / filename
@@ -330,7 +399,9 @@ def plot_speedup(results: list[BenchmarkResult], filename: str):
 def print_summary_table(results: list[BenchmarkResult]):
     """Print text tables comparing fbtree vs skiplist."""
     operations = ["RankLookup", "SeekToScore", "GetRankOfItem", "IterateForward",
-                  "InsertRandom", "InsertAppend", "DeleteRandom", "PopHead", "PopTail"]
+                  "InsertRandom", "InsertAppend", "DeleteRandom", "PopHead", "PopTail",
+                  "RangeDeleteRank", "RangeDeleteScore", "PartialScan",
+                  "Mixed", "ScoreUpdate"]
     sizes = [128, 1024, 8192, 65536]
     size_labels = ["128", "1K", "8K", "64K"]
 
@@ -342,7 +413,7 @@ def print_summary_table(results: list[BenchmarkResult]):
         return
 
     # Header
-    header = f"{'Operation':<16} {'Struct':<10}" + "".join(f"{l:>12}" for l in size_labels)
+    header = f"{'Operation':<18} {'Struct':<10}" + "".join(f"{l:>12}" for l in size_labels)
     print("\n" + "=" * len(header))
     print("Cold-Cache Benchmark Results (ops/sec)")
     print("=" * len(header))
@@ -351,7 +422,7 @@ def print_summary_table(results: list[BenchmarkResult]):
 
     for op in ops_found:
         for struct in ["Fbtree", "Skiplist"]:
-            row = f"{op:<16} {struct:<10}"
+            row = f"{op:<18} {struct:<10}"
             for size in sizes:
                 r = next((x for x in results if x.structure == struct
                          and x.operation == op and x.item_count == size), None)
@@ -363,12 +434,12 @@ def print_summary_table(results: list[BenchmarkResult]):
     print("=" * len(header))
     print("Fbtree Speedup vs Skiplist (>1 = Fbtree faster)")
     print("=" * len(header))
-    header2 = f"{'Operation':<16}" + "".join(f"{l:>12}" for l in size_labels)
+    header2 = f"{'Operation':<18}" + "".join(f"{l:>12}" for l in size_labels)
     print(header2)
     print("-" * len(header2))
 
     for op in ops_found:
-        row = f"{op:<16}"
+        row = f"{op:<18}"
         for size in sizes:
             fbt = next((x.items_per_sec for x in results if x.structure == "Fbtree"
                        and x.operation == op and x.item_count == size), 0)
@@ -381,6 +452,139 @@ def print_summary_table(results: list[BenchmarkResult]):
                 row += f"{'--':>12}"
         print(row)
     print()
+
+
+def plot_cold_range_delete(results: list[BenchmarkResult], filename: str):
+    """Plot cold-cache range delete throughput vs size."""
+    sizes = [128, 1024, 8192, 65536]
+    size_labels = ["128", "1K", "8K", "64K"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    for ax, (op, title) in zip(axes, [
+        ("RangeDeleteRank", "Range Delete by Rank"),
+        ("RangeDeleteScore", "Range Delete by Score")
+    ]):
+        for struct in ["Fbtree", "Skiplist"]:
+            points = [(r.item_count, r.items_per_sec / 1e6) for r in results
+                      if r.structure == struct and r.operation == op]
+            if points:
+                points.sort()
+                counts, rates = zip(*points)
+                ax.plot(counts, rates, label=struct, **STYLES[struct], markersize=8, linewidth=2)
+
+        ax.set_xlabel("Set Size (items)")
+        ax.set_ylabel("Throughput (M ops/sec)")
+        ax.set_title(title)
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(sizes)
+        ax.set_xticklabels(size_labels)
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle("Range Delete Performance - Cold Cache", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    out = SCRIPT_DIR / filename
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Generated: {out}")
+
+
+def plot_cold_partial_scan(results: list[BenchmarkResult], filename: str):
+    """Plot cold-cache partial range scan throughput vs size."""
+    sizes = [128, 1024, 8192, 65536]
+    size_labels = ["128", "1K", "8K", "64K"]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for struct in ["Fbtree", "Skiplist"]:
+        points = [(r.item_count, r.items_per_sec / 1e6) for r in results
+                  if r.structure == struct and r.operation == "PartialScan"]
+        if points:
+            points.sort()
+            counts, rates = zip(*points)
+            ax.plot(counts, rates, label=struct, **STYLES[struct], markersize=8, linewidth=2)
+
+    ax.set_xlabel("Set Size (items)", fontsize=12)
+    ax.set_ylabel("Throughput (M items/sec)", fontsize=12)
+    ax.set_title("Partial Range Scan Performance - Cold Cache", fontsize=14, fontweight="bold")
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(sizes)
+    ax.set_xticklabels(size_labels)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = SCRIPT_DIR / filename
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Generated: {out}")
+
+
+def plot_cold_mixed_workload(results: list[BenchmarkResult], filename: str):
+    """Plot cold-cache mixed workload throughput vs size."""
+    sizes = [128, 1024, 8192, 65536]
+    size_labels = ["128", "1K", "8K", "64K"]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for struct in ["Fbtree", "Skiplist"]:
+        points = [(r.item_count, r.items_per_sec / 1e6) for r in results
+                  if r.structure == struct and r.operation == "Mixed"]
+        if points:
+            points.sort()
+            counts, rates = zip(*points)
+            ax.plot(counts, rates, label=struct, **STYLES[struct], markersize=8, linewidth=2)
+
+    ax.set_xlabel("Set Size (items)", fontsize=12)
+    ax.set_ylabel("Throughput (M ops/sec)", fontsize=12)
+    ax.set_title("Mixed Workload Performance - Cold Cache", fontsize=14, fontweight="bold")
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(sizes)
+    ax.set_xticklabels(size_labels)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = SCRIPT_DIR / filename
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Generated: {out}")
+
+
+def plot_cold_score_update(results: list[BenchmarkResult], filename: str):
+    """Plot cold-cache score update throughput vs size."""
+    sizes = [128, 1024, 8192, 65536]
+    size_labels = ["128", "1K", "8K", "64K"]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for struct in ["Fbtree", "Skiplist"]:
+        points = [(r.item_count, r.items_per_sec / 1e6) for r in results
+                  if r.structure == struct and r.operation == "ScoreUpdate"]
+        if points:
+            points.sort()
+            counts, rates = zip(*points)
+            ax.plot(counts, rates, label=struct, **STYLES[struct], markersize=8, linewidth=2)
+
+    ax.set_xlabel("Set Size (items)", fontsize=12)
+    ax.set_ylabel("Throughput (M ops/sec)", fontsize=12)
+    ax.set_title("Score Update Performance - Cold Cache", fontsize=14, fontweight="bold")
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(sizes)
+    ax.set_xticklabels(size_labels)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = SCRIPT_DIR / filename
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Generated: {out}")
 
 
 def main():
@@ -413,6 +617,10 @@ Each operation accesses a different structure, ensuring cold-cache conditions.
     plot_cold_delete(results, "cold_perf_delete.png")
     plot_cold_iterate(results, "cold_perf_iterate.png")
     plot_cold_latency(results, "cold_perf_latency.png")
+    plot_cold_range_delete(results, "cold_perf_range_delete.png")
+    plot_cold_partial_scan(results, "cold_perf_partial_scan.png")
+    plot_cold_mixed_workload(results, "cold_perf_mixed_workload.png")
+    plot_cold_score_update(results, "cold_perf_score_update.png")
     plot_speedup(results, "cold_perf_speedup.png")
 
 

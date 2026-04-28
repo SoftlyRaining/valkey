@@ -452,6 +452,202 @@ BENCHMARK_DEFINE_F(Fbtree_RandBuild, IterateBackward)
     state.SetItemsProcessed(state.iterations() * item_count);
 }
 
+/* ============ Range Delete by Rank Benchmark ============ */
+
+static void BM_Fbtree_RangeDeleteByRank(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto strs = createStrings(count, size, false);
+
+    fbtreeIndex *fbt = fbtreeCreate();
+    std::vector<sds> items(count);
+    for (size_t i = 0; i < count; i++)
+        items[i] = fbtreeInsert(fbt, sdsdup(strs[i]));
+
+    size_t range_size = count / 10;
+    unsigned long start_rank = (unsigned long)(count * 45 / 100);
+    unsigned long end_rank = start_rank + range_size - 1;
+
+    for (auto _ : state) {
+        unsigned long deleted = fbtreeDeleteRangeByRank(fbt, start_rank, end_rank, NULL, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        for (size_t i = 0; i < range_size; i++)
+            items[start_rank + i] = fbtreeInsert(fbt, sdsdup(strs[start_rank + i]));
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+    fbtreeFree(fbt);
+    freeStrings(strs);
+}
+
+/* ============ Range Delete by Score Benchmark ============ */
+
+static void BM_Fbtree_RangeDeleteByScore(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto strs = createStrings(count, size, false);
+
+    fbtreeIndex *fbt = fbtreeCreate();
+    std::vector<sds> items(count);
+    for (size_t i = 0; i < count; i++)
+        items[i] = fbtreeInsert(fbt, sdsdup(strs[i]));
+
+    size_t range_size = count / 10;
+    size_t start_idx = count * 45 / 100;
+    size_t end_idx = start_idx + range_size - 1;
+
+    unsigned char min_score[8], max_score[8];
+    encodeScoreToBytes((double)start_idx, min_score);
+    encodeScoreToBytes((double)end_idx, max_score);
+
+    for (auto _ : state) {
+        unsigned long deleted = fbtreeDeleteRangeByScore(fbt, (const char *)min_score, (const char *)max_score, 0, 0, NULL, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        for (size_t i = 0; i < range_size; i++)
+            items[start_idx + i] = fbtreeInsert(fbt, sdsdup(strs[start_idx + i]));
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+    fbtreeFree(fbt);
+    freeStrings(strs);
+}
+
+/* ============ Partial Range Scan Benchmark ============ */
+
+static void BM_Fbtree_PartialRangeScan(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto strs = createStrings(count, size, false);
+
+    fbtreeIndex *fbt = fbtreeCreate();
+    for (size_t i = 0; i < count; i++)
+        fbtreeInsert(fbt, sdsdup(strs[i]));
+
+    std::mt19937 rng(123);
+    unsigned char score_buf[8];
+    for (auto _ : state) {
+        size_t start = rng() % (count - 100);
+        encodeScoreToBytes((double)start, score_buf);
+
+        fbtreeIterator iter;
+        fbtreeInitIterator(&iter, fbt);
+        fbtreeSeekToScore((const char *)score_buf, &iter);
+
+        const_sds pos;
+        for (int i = 0; i < 100; i++) {
+            fbtreeNext(&iter, &pos);
+            benchmark::DoNotOptimize(pos);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() * 100);
+    fbtreeFree(fbt);
+    freeStrings(strs);
+}
+
+/* ============ Mixed Workload Benchmark ============ */
+
+static void BM_Fbtree_MixedWorkload(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    int read_pct = (int)state.range(2);
+    auto strs = createStrings(count, size, false);
+
+    fbtreeIndex *fbt = fbtreeCreate();
+    std::vector<sds> items(count);
+    for (size_t i = 0; i < count; i++)
+        items[i] = fbtreeInsert(fbt, sdsdup(strs[i]));
+
+    /* Per cycle: read_pct lookups, remaining split 50/50 insert/delete */
+    const int cycle_ops = 100;
+    int num_reads = read_pct;
+    int num_writes = cycle_ops - num_reads;
+    int num_deletes = num_writes / 2;
+    int num_inserts = num_writes - num_deletes;
+
+    std::mt19937 rng(123);
+    double next_score = (double)count;
+    std::vector<char> buf(size);
+
+    /* Pre-generate a shuffled delete order */
+    std::vector<size_t> delete_order(count);
+    std::iota(delete_order.begin(), delete_order.end(), 0);
+    std::shuffle(delete_order.begin(), delete_order.end(), rng);
+    size_t del_pos = 0;
+
+    for (auto _ : state) {
+        /* Lookups */
+        for (int i = 0; i < num_reads; i++) {
+            size_t rank = rng() % count;
+            auto s = fbtreeGetAtRank(fbt, rank);
+            benchmark::DoNotOptimize(s);
+        }
+
+        /* Deletes */
+        for (int i = 0; i < num_deletes; i++) {
+            size_t idx = delete_order[del_pos++ % count];
+            fbtreeDelete(fbt, items[idx]);
+            items[idx] = nullptr;
+        }
+
+        /* Inserts (to balance deletes and maintain stable size) */
+        del_pos -= num_deletes; /* rewind to re-use same slots */
+        for (int i = 0; i < num_inserts; i++) {
+            size_t idx = delete_order[(del_pos + i) % count];
+            encodeScoreToBytes(next_score++, (unsigned char *)buf.data());
+            memset(buf.data() + 8, 'x', size - 8 - 1);
+            buf[size - 1] = '\0';
+            items[idx] = fbtreeInsert(fbt, sdsnewlen(buf.data(), size));
+        }
+        del_pos += num_inserts;
+    }
+    state.SetItemsProcessed(state.iterations() * cycle_ops);
+    fbtreeFree(fbt);
+    freeStrings(strs);
+}
+
+/* ============ Score Update Benchmark ============ */
+
+static void BM_Fbtree_ScoreUpdate(benchmark::State &state) {
+    size_t count = state.range(0);
+    size_t size = state.range(1);
+    auto strs = createStrings(count, size, false);
+
+    fbtreeIndex *fbt = fbtreeCreate();
+    std::vector<sds> items(count);
+    for (size_t i = 0; i < count; i++)
+        items[i] = fbtreeInsert(fbt, sdsdup(strs[i]));
+
+    std::vector<size_t> update_order(count);
+    std::iota(update_order.begin(), update_order.end(), 0);
+    std::mt19937 rng(42);
+    std::shuffle(update_order.begin(), update_order.end(), rng);
+
+    std::vector<char> buf(size);
+    size_t pos = 0;
+    for (auto _ : state) {
+        size_t idx = update_order[pos++ % count];
+
+        /* Extract element bytes before delete (tree frees the sds) */
+        state.PauseTiming();
+        memcpy(buf.data() + 8, items[idx] + 8, size - 8);
+        double new_score = (double)(rng() % count);
+        encodeScoreToBytes(new_score, (unsigned char *)buf.data());
+        sds new_packed = sdsnewlen(buf.data(), size);
+        state.ResumeTiming();
+
+        fbtreeDelete(fbt, items[idx]);
+        items[idx] = fbtreeInsert(fbt, new_packed);
+        benchmark::DoNotOptimize(items[idx]);
+    }
+    state.SetItemsProcessed(state.iterations());
+    fbtreeFree(fbt);
+    freeStrings(strs);
+}
+
 /* ============ Register Benchmarks ============ */
 
 /* Insert benchmarks - test all size combinations */
@@ -477,3 +673,31 @@ BENCHMARK_REGISTER_F(Fbtree_RandBuild, SeekToScore)->BENCH_ARGS_STANDARD();
 BENCHMARK_REGISTER_F(Fbtree_RandBuild, GetRankOfItem)->BENCH_ARGS_STANDARD();
 BENCHMARK_REGISTER_F(Fbtree_RandBuild, IterateForward)->BENCH_ARGS_STANDARD()->Iterations(1);
 BENCHMARK_REGISTER_F(Fbtree_RandBuild, IterateBackward)->BENCH_ARGS_STANDARD()->Iterations(1);
+
+/* Range delete benchmarks */
+BENCHMARK(BM_Fbtree_RangeDeleteByRank)->BENCH_ARGS_STANDARD();
+BENCHMARK(BM_Fbtree_RangeDeleteByScore)->BENCH_ARGS_STANDARD();
+
+/* Partial range scan benchmark */
+BENCHMARK(BM_Fbtree_PartialRangeScan)->BENCH_ARGS_STANDARD();
+
+/* Mixed workload benchmark — BENCH_ARGS_STANDARD × {20, 50, 80} read percentages */
+BENCHMARK(BM_Fbtree_MixedWorkload)
+    ->Args({1024, 24, 20})
+    ->Args({1024, 24, 50})
+    ->Args({1024, 24, 80})
+    ->Args({8192, 24, 20})
+    ->Args({8192, 24, 50})
+    ->Args({8192, 24, 80})
+    ->Args({65536, 24, 20})
+    ->Args({65536, 24, 50})
+    ->Args({65536, 24, 80})
+    ->Args({524288, 24, 20})
+    ->Args({524288, 24, 50})
+    ->Args({524288, 24, 80})
+    ->Args({4194304, 24, 20})
+    ->Args({4194304, 24, 50})
+    ->Args({4194304, 24, 80});
+
+/* Score update benchmark */
+BENCHMARK(BM_Fbtree_ScoreUpdate)->BENCH_ARGS_STANDARD();

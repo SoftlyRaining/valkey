@@ -10,6 +10,10 @@ FILTERS = [
     "(Fbtree|Skiplist)_RandBuild/",
     "BM_(Fbtree|Skiplist)_Insert_(Random|Append)",
     "BM_(Fbtree|Skiplist)_Delete_",
+    "BM_(Fbtree|Skiplist)_RangeDelete",
+    "BM_(Fbtree|Skiplist)_PartialRangeScan",
+    "BM_(Fbtree|Skiplist)_MixedWorkload",
+    "BM_(Fbtree|Skiplist)_ScoreUpdate",
 ]
 
 if __name__ == "__main__":

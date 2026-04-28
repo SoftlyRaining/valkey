@@ -5,7 +5,7 @@ from pathlib import Path
 from bench_utils import build_microbench, run_benchmarks
 
 OUTPUT_FILE = Path(__file__).parent / "cold_benchmark_output.txt"
-FILTER = "^(Fbtree_Cold|Fbtree_Cold_Insert|Fbtree_Cold_Delete|Fbtree_Cold_PopHead|Fbtree_Cold_PopTail|Skiplist_Cold|Skiplist_Cold_Insert|Skiplist_Cold_Delete|Skiplist_Cold_PopHead|Skiplist_Cold_PopTail)/"
+FILTER = "^(Fbtree_Cold|Fbtree_Cold_Insert|Fbtree_Cold_Delete|Fbtree_Cold_PopHead|Fbtree_Cold_PopTail|Fbtree_Cold_RangeDeleteRank|Fbtree_Cold_RangeDeleteScore|Fbtree_Cold_PartialScan|Fbtree_Cold_Mixed|Fbtree_Cold_ScoreUpdate|Skiplist_Cold|Skiplist_Cold_Insert|Skiplist_Cold_Delete|Skiplist_Cold_PopHead|Skiplist_Cold_PopTail|Skiplist_Cold_RangeDeleteRank|Skiplist_Cold_RangeDeleteScore|Skiplist_Cold_PartialScan|Skiplist_Cold_Mixed|Skiplist_Cold_ScoreUpdate)/"
 
 if __name__ == "__main__":
     build_microbench()

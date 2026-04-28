@@ -47,6 +47,10 @@ static std::deque<SkiplistColdCache> g_skiplist_delete_cache;
 static std::deque<SkiplistColdCache> g_skiplist_insert_cache;
 static std::deque<SkiplistColdCache> g_skiplist_pophead_cache;
 static std::deque<SkiplistColdCache> g_skiplist_poptail_cache;
+static std::deque<SkiplistColdCache> g_skiplist_rangedelrank_cache;
+static std::deque<SkiplistColdCache> g_skiplist_rangedelscore_cache;
+static std::deque<SkiplistColdCache> g_skiplist_mixed_cache;
+static std::deque<SkiplistColdCache> g_skiplist_scoreupdate_cache;
 
 /* Clean up all caches at program exit */
 static struct SkiplistColdCacheCleanup {
@@ -56,6 +60,10 @@ static struct SkiplistColdCacheCleanup {
         g_skiplist_insert_cache.clear();
         g_skiplist_pophead_cache.clear();
         g_skiplist_poptail_cache.clear();
+        g_skiplist_rangedelrank_cache.clear();
+        g_skiplist_rangedelscore_cache.clear();
+        g_skiplist_mixed_cache.clear();
+        g_skiplist_scoreupdate_cache.clear();
     }
 } g_skiplist_cold_cache_cleanup;
 
@@ -333,6 +341,177 @@ BENCHMARK_DEFINE_F(Skiplist_Cold_PopTail, Pop)
     state.SetItemsProcessed(state.iterations());
 }
 
+/* ============ Range Delete by Rank Benchmark ============ */
+
+class Skiplist_Cold_RangeDeleteRank : public Skiplist_Cold_Mutating<g_skiplist_rangedelrank_cache> {};
+
+BENCHMARK_DEFINE_F(Skiplist_Cold_RangeDeleteRank, Op)
+(benchmark::State &state) {
+    size_t list_idx = 0;
+    size_t range_size = item_count / 10;
+    unsigned long start_rank = (unsigned long)(item_count * 45 / 100);
+    /* zslDeleteRangeByRank uses 1-based inclusive ranks */
+    unsigned long zsl_start = start_rank + 1;
+    unsigned long zsl_end = start_rank + range_size;
+    for (auto _ : state) {
+        size_t t = cache->access_order[list_idx++ % num_lists];
+        auto &list = cache->lists[t];
+
+        unsigned long deleted = zslDeleteRangeByRank(list.zsl, zsl_start, zsl_end, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        /* Restore deleted elements */
+        for (size_t i = 0; i < range_size; i++) {
+            size_t idx = start_rank + i;
+            list.nodes[idx] = zslInsert(list.zsl, list.scores[idx], list.elems[idx]);
+        }
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+}
+
+/* ============ Range Delete by Score Benchmark ============ */
+
+class Skiplist_Cold_RangeDeleteScore : public Skiplist_Cold_Mutating<g_skiplist_rangedelscore_cache> {};
+
+BENCHMARK_DEFINE_F(Skiplist_Cold_RangeDeleteScore, Op)
+(benchmark::State &state) {
+    size_t list_idx = 0;
+    size_t range_size = item_count / 10;
+    size_t start_idx = item_count * 45 / 100;
+    size_t end_idx = start_idx + range_size - 1;
+    double min_score = (double)start_idx;
+    double max_score = (double)end_idx;
+
+    for (auto _ : state) {
+        size_t t = cache->access_order[list_idx++ % num_lists];
+        auto &list = cache->lists[t];
+
+        zrangespec range = {min_score, max_score, 0, 0};
+        unsigned long deleted = zslDeleteRangeByScore(list.zsl, &range, NULL);
+        benchmark::DoNotOptimize(deleted);
+
+        state.PauseTiming();
+        /* Restore deleted elements */
+        for (size_t i = 0; i < range_size; i++) {
+            size_t idx = start_idx + i;
+            list.nodes[idx] = zslInsert(list.zsl, list.scores[idx], list.elems[idx]);
+        }
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * range_size);
+}
+
+/* ============ Partial Range Scan Benchmark ============ */
+
+BENCHMARK_DEFINE_F(Skiplist_Cold, PartialScan)
+(benchmark::State &state) {
+    std::mt19937 rng(123);
+    size_t list_idx = 0;
+    for (auto _ : state) {
+        size_t t = cache->access_order[list_idx++ % num_lists];
+        size_t start = rng() % (item_count - 100);
+        zrangespec range = {(double)start, (double)(item_count - 1), 0, 0};
+        zskiplistNode *node = zslNthInRange(cache->lists[t].zsl, &range, 0, nullptr);
+        benchmark::DoNotOptimize(node);
+
+        zskiplistIterator iter;
+        zslInitIterator(&iter, cache->lists[t].zsl);
+        zslSeekToRank(&iter, zslGetRank(cache->lists[t].zsl, node));
+        zskiplistNode *n;
+        for (int i = 0; i < 99 && zslNext(&iter, &n); i++) {
+            benchmark::DoNotOptimize(n);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() * 100);
+}
+
+/* ============ Mixed Workload Benchmark ============ */
+
+class Skiplist_Cold_Mixed : public Skiplist_Cold_Mutating<g_skiplist_mixed_cache> {};
+
+BENCHMARK_DEFINE_F(Skiplist_Cold_Mixed, Op)
+(benchmark::State &state) {
+    const int cycle_ops = 100;
+    int num_reads = 50;
+    int num_writes = cycle_ops - num_reads;
+    int num_deletes = num_writes / 2;
+    int num_inserts = num_writes - num_deletes;
+
+    std::mt19937 rng(123);
+    size_t list_idx = 0;
+    size_t ele_size = cache->item_size - sizeof(double);
+    std::vector<char> ele_buf(ele_size + 1);
+
+    for (auto _ : state) {
+        size_t t = cache->access_order[list_idx++ % num_lists];
+        auto &list = cache->lists[t];
+
+        /* Lookups */
+        for (int i = 0; i < num_reads; i++) {
+            unsigned long rank = (rng() % item_count) + 1; /* 1-indexed */
+            auto *node = zslGetElementByRank(list.zsl, rank);
+            benchmark::DoNotOptimize(node);
+        }
+
+        /* Deletes */
+        std::vector<size_t> del_indices(num_deletes);
+        for (int i = 0; i < num_deletes; i++) {
+            size_t idx = rng() % item_count;
+            del_indices[i] = idx;
+            if (list.nodes[idx]) {
+                zslDelete(list.zsl, list.nodes[idx]);
+                list.nodes[idx] = nullptr;
+            }
+        }
+
+        /* Inserts to balance deletes */
+        double next_score = (double)(item_count * 2);
+        for (int i = 0; i < num_inserts; i++) {
+            snprintf(ele_buf.data(), ele_buf.size(), "%0*d", (int)ele_size, (int)(item_count * 2 + i));
+            sds elem = sdsnewlen(ele_buf.data(), ele_size);
+            zslInsert(list.zsl, next_score + i, elem);
+            sdsfree(elem); /* zslInsert copies the element */
+        }
+
+        state.PauseTiming();
+        /* Restore: rebuild the list from scratch to ensure clean state */
+        zslFree(list.zsl);
+        list.zsl = zslCreate();
+        for (size_t i = 0; i < item_count; i++)
+            list.nodes[i] = zslInsert(list.zsl, list.scores[i], list.elems[i]);
+        state.ResumeTiming();
+    }
+    state.SetItemsProcessed(state.iterations() * cycle_ops);
+}
+
+/* ============ Score Update Benchmark ============ */
+
+class Skiplist_Cold_ScoreUpdate : public Skiplist_Cold_Mutating<g_skiplist_scoreupdate_cache> {};
+
+BENCHMARK_DEFINE_F(Skiplist_Cold_ScoreUpdate, Op)
+(benchmark::State &state) {
+    std::mt19937 rng(42);
+    size_t list_idx = 0;
+    for (auto _ : state) {
+        size_t t = cache->access_order[list_idx++ % num_lists];
+        auto &list = cache->lists[t];
+        size_t idx = rng() % item_count;
+
+        /* Prepare new score during paused timing */
+        state.PauseTiming();
+        double new_score = (double)(rng() % item_count);
+        state.ResumeTiming();
+
+        zslDelete(list.zsl, list.nodes[idx]);
+        list.nodes[idx] = zslInsert(list.zsl, new_score, list.elems[idx]);
+        list.scores[idx] = new_score;
+        benchmark::DoNotOptimize(list.nodes[idx]);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+
 /* ============ Register Benchmarks ============ */
 
 #define COLD_BENCH_ARGS()  \
@@ -346,6 +525,7 @@ BENCHMARK_REGISTER_F(Skiplist_Cold, RankLookup)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Skiplist_Cold, SeekToScore)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Skiplist_Cold, GetRankOfItem)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Skiplist_Cold, IterateForward)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Skiplist_Cold, PartialScan)->COLD_BENCH_ARGS();
 
 /* Mutating benchmarks - each uses its own cache */
 BENCHMARK_REGISTER_F(Skiplist_Cold_Insert, Random)->COLD_BENCH_ARGS();
@@ -353,3 +533,7 @@ BENCHMARK_REGISTER_F(Skiplist_Cold_Insert, Append)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Skiplist_Cold_Delete, Random)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Skiplist_Cold_PopHead, Pop)->COLD_BENCH_ARGS();
 BENCHMARK_REGISTER_F(Skiplist_Cold_PopTail, Pop)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Skiplist_Cold_RangeDeleteRank, Op)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Skiplist_Cold_RangeDeleteScore, Op)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Skiplist_Cold_Mixed, Op)->COLD_BENCH_ARGS();
+BENCHMARK_REGISTER_F(Skiplist_Cold_ScoreUpdate, Op)->COLD_BENCH_ARGS();

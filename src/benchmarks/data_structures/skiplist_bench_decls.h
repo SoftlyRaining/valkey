@@ -36,6 +36,11 @@ typedef struct {
 
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
 
+/* Bulk range deletion */
+typedef struct hashtable hashtable;
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, hashtable *ht);
+unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, hashtable *ht);
+
 /* Iterator API */
 typedef uint64_t zskiplistIterator[2];
 void zslInitIterator(zskiplistIterator *iterator, zskiplist *zsl);
