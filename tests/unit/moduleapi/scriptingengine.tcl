@@ -473,6 +473,28 @@ start_server {tags {"modules"}} {
         assert_match "*name=HELLO,module=helloengine*" $info
     }
 
+    test {Unload scripting engine with cached eval scripts does not crash} {
+        # Cache multiple eval scripts using the HELLO engine.
+        # Each unique script body produces a different SHA and entry in evalCtx.scripts.
+        for {set j 1} {$j <= 20} {incr j} {
+            r eval "#!hello\nFUNCTION foo\nCONSTI $j\nRETURN" 0
+        }
+        # Verify scripts are cached
+        set cached [s number_of_cached_scripts]
+        assert {$cached >= 20}
+        # Unload the module - this calls evalRemoveScriptsFromEngine which
+        # iterates the hashtable and deletes all scripts for this engine.
+        # Under AddressSanitizer this would crash if the SHA key passed to
+        # hashtableDelete points into the freed evalScript struct.
+        set result [r module unload helloengine]
+        assert_equal $result "OK"
+        # Verify the HELLO engine scripts were removed
+        set cached_after [s number_of_cached_scripts]
+        assert {$cached_after < $cached}
+        # Reload the module for subsequent tests
+        r module load $testmodule
+    }
+
     test {Unload scripting engine module} {
         set result [r module unload helloengine]
         assert_equal $result "OK"

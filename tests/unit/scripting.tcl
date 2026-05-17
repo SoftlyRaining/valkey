@@ -1835,6 +1835,32 @@ start_server {tags {"scripting external:skip"}} {
         }
         assert_equal {hello world} [r evalsha $sha 0]
     }
+
+    test {Lua scripts eviction with interleaved EVALSHA does not crash} {
+        r script flush
+        r config resetstat
+
+        # Fill the LRU cache to capacity (500 scripts)
+        for {set j 1} {$j <= 500} {incr j} {
+            r eval "return $j" 0
+        }
+        assert_equal [s number_of_cached_scripts] 500
+
+        # Now trigger evictions while interleaving EVALSHA calls.
+        # This exercises evalDeleteScript where the SHA key points into
+        # the evalScript struct being freed.
+        set sha_500 "98fe65896b61b785c5ed328a5a0a1421f4f1490c"
+        for {set j 501} {$j <= 600} {incr j} {
+            r eval "return $j" 0
+            # Re-execute an existing script via EVALSHA to exercise
+            # the LRU reorder path after eviction
+            if {$j % 5 == 0} {
+                catch {r evalsha $sha_500 0} result
+            }
+        }
+        assert_equal [s number_of_cached_scripts] 500
+        assert_equal [s evicted_scripts] 100
+    }
 }
 
 } ;# is_eval

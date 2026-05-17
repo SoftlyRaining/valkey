@@ -187,9 +187,14 @@ void evalRemoveScriptsFromEngine(scriptingEngine *engine) {
             if (es->node) {
                 listDelNode(evalCtx.scripts_lru_list, es->node);
             }
-            hashtableDelete(evalCtx.scripts, es->sha);
+            /* Copy SHA to local buffer before deletion since es->sha is
+             * freed by the entry destructor inside hashtableDelete. */
+            char sha_buf[40];
+            memcpy(sha_buf, es->sha, 40);
+            hashtableDelete(evalCtx.scripts, sha_buf);
         }
     }
+    hashtableCleanupIterator(&iter);
 }
 
 void evalReset(int async) {
@@ -328,7 +333,13 @@ static void evalDeleteScript(client *c, const char *sha) {
     serverAssertWithInfo(c, NULL, found);
     evalScript *es = (evalScript *)found;
     evalCtx.scripts_mem -= getStringObjectSdsUsedMemory(es->body);
-    hashtableDelete(evalCtx.scripts, sha);
+    /* Copy SHA to a local buffer before deletion. The sha parameter may point
+     * into the evalScript struct (es->sha) which is freed by the hashtable's
+     * entry destructor during hashtableDelete. Using a local copy avoids
+     * passing a pointer to soon-to-be-freed memory. */
+    char sha_buf[40];
+    memcpy(sha_buf, sha, 40);
+    hashtableDelete(evalCtx.scripts, sha_buf);
 }
 
 /* Users who abuse EVAL will generate a new lua script on each call, which can
@@ -711,30 +722,4 @@ void evalGenericCommandWithDebugging(client *c, int evalsha) {
     } else {
         scriptingEngineDebuggerDisable(c);
     }
-}
-
-/* Defrag helper for EVAL scripts
- *
- * returns NULL in case the allocation wasn't moved.
- * when it returns a non-null value, the old pointer was already released
- * and should NOT be accessed. */
-void *evalActiveDefragScript(void *ptr) {
-    evalScript *es = ptr;
-    void *ret = NULL;
-
-    compiledFunction *func = es->script;
-    if ((func = activeDefragAlloc(func))) {
-        es->script = func;
-    }
-
-    /* try to defrag script struct */
-    if ((ret = activeDefragAlloc(es))) {
-        es = ret;
-    }
-
-    /* try to defrag actual script object */
-    robj *ob = activeDefragStringOb(es->body);
-    if (ob) es->body = ob;
-
-    return ret;
 }
