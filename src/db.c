@@ -1051,6 +1051,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
     stringRef val = {NULL, 0};
     sds key = NULL;
+    size_t zset_ele_len = 0;
 
     robj *o = data->o;
     data->sampled++;
@@ -1063,10 +1064,10 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_SET) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
-        const char *ptr;
-        size_t ele_len;
-        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ptr, &ele_len);
-        key = (sds)ptr;
+        const char *zset_ptr;
+        size_t zset_ele_len;
+        orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &zset_ptr, &zset_ele_len);
+        key = (sds)zset_ptr;
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
@@ -1079,7 +1080,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+        size_t keylen = (o->type == OBJ_ZSET) ? zset_ele_len : sdslen(key);
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, keylen, 0)) {
             return;
         }
     }
@@ -1091,7 +1093,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
         const char *ptr;
         size_t ele_len;
         orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ptr, &ele_len);
-        key = sdsdup((sds)ptr);
+        key = sdsnewlen(ptr, ele_len);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
             int len = ld2string(buf, sizeof(buf), orderedIndexGetScore((const OrderedIndexItem *)entry), LD_STR_AUTO);
