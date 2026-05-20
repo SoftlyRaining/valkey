@@ -967,8 +967,8 @@ static int tryMergeChild(fbtreeIndex *fbt, innerNode *parent, int child_idx) {
         if (boundary > 0 && boundary < left_inner->header.num_items) {
             left_inner->child_num_items[boundary - 1] = left_inner->children[boundary - 1]->num_items;
             left_inner->child_num_items[boundary] = left_inner->children[boundary]->num_items;
-            int ci = (left_inner->child_num_items[boundary] < MIN_FILL) ? boundary :
-                     (left_inner->child_num_items[boundary - 1] < MIN_FILL) ? boundary - 1 : -1;
+            int ci = (left_inner->child_num_items[boundary] < MIN_FILL) ? boundary : (left_inner->child_num_items[boundary - 1] < MIN_FILL) ? boundary - 1
+                                                                                                                                            : -1;
             while (ci >= 0 && ci < left_inner->header.num_items) {
                 int merged_idx = tryMergeChild(fbt, left_inner, ci);
                 if (merged_idx < 0) break;
