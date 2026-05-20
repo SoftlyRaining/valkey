@@ -263,10 +263,12 @@ unsigned long fbtreeOICountLexRange(OrderedIndex *oi, const_sds min, const_sds m
     while (fbtreeNext(&iter, &pos)) {
         const char *ele = pos + SCORE_SIZE;
         size_t ele_len = sdslen(pos) - SCORE_SIZE;
-        int cmp = memcmp(ele, max, ele_len < sdslen(max) ? ele_len : sdslen(max)); if (cmp == 0) cmp = (int)ele_len - (int)sdslen(max);
+        int cmp = memcmp(ele, max, ele_len < sdslen(max) ? ele_len : sdslen(max));
+        if (cmp == 0) cmp = (int)ele_len - (int)sdslen(max);
         if (max_ex ? cmp >= 0 : cmp > 0) break;
         if (min_ex && count == 0) {
-            int cmp_min = memcmp(ele, min, ele_len < sdslen(min) ? ele_len : sdslen(min)); if (cmp_min == 0) cmp_min = (int)ele_len - (int)sdslen(min);
+            int cmp_min = memcmp(ele, min, ele_len < sdslen(min) ? ele_len : sdslen(min));
+            if (cmp_min == 0) cmp_min = (int)ele_len - (int)sdslen(min);
             if (cmp_min == 0) continue;
         }
         count++;

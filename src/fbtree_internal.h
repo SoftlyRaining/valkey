@@ -31,7 +31,7 @@
  * unsigned order to signed order: 0→-128, 127→-1, 128→0, 255→127.
  * Features are stored pre-biased; search targets are biased at lookup time. */
 #define FEATURE_BIAS 0x80
-#define MAX_TREE_DEPTH 16   /* NODE_SIZE=61, so depth 6 handles >61^6 = ~51 billion elements */
+#define MAX_TREE_DEPTH 16 /* NODE_SIZE=61, so depth 6 handles >61^6 = ~51 billion elements */
 
 /* Common header for all node types */
 typedef struct {
