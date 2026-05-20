@@ -3640,7 +3640,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
 
         while (added < count) {
             listpackEntry key;
-            double score;
+            double score = 0;
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists
