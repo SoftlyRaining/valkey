@@ -556,6 +556,7 @@ ENGINE_SERVER_OBJ = \
     sha256.o \
     siphash.o \
     skiplist_ordered_index.o \
+    fbtree.o \
     ordered_index.o \
     socket.o \
     sort.o \
