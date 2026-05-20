@@ -23,7 +23,6 @@
 #define EMBED_PREFIX_LEN 30  /* Tuned to fit innerNode exactly in 1024-byte jemalloc size class */
 #endif
 
-#define MIN_FILL (NODE_SIZE / 4) /* Minimum items before node underflows */
 #define FEATURE_SIZE 4
 #define FEATURE_ROW_SIZE 64 /* size of cache line */
 /* SIMD comparison instructions (e.g., _mm256_cmpgt_epi8) operate on signed
@@ -113,7 +112,5 @@ static_assert(EMBED_PREFIX_LEN >= LONG_PREFIX_PTR_OFFSET + sizeof(char *), "embe
 
 /* Debug functions — test-only, not part of the public API. */
 bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose);
-bool fbtreeDebugValidateMergeEnforcement(fbtreeIndex *fbt);
-int fbtreeDebugValidateMergeEnforcementDepth(fbtreeIndex *fbt);
 
 #endif /* FBTREE_INTERNAL_H */
