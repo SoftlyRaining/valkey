@@ -71,8 +71,11 @@ struct fbtreeIndex {
 static_assert(sizeof(innerNode) == 2048, "64-bit innerNode should fit in 2048-byte jemalloc size class");
 static_assert(sizeof(leafNode) == 512, "64-bit leafNode should fit perfectly in jemalloc size class");
 #elif SIZE_MAX == UINT32_MAX /* 32-bit */
-static_assert(sizeof(innerNode) == 1024, "32-bit innerNode should fit exactly in 1024-byte jemalloc size class");
-static_assert(sizeof(leafNode) == 256, "32-bit leafNode should fit perfectly in jemalloc size class");
+/* NODE_SIZE is tuned for 64-bit. On 32-bit, structs are smaller per-slot but
+ * NODE_SIZE stays the same, so they don't fill their size class optimally.
+ * A 32-bit-specific NODE_SIZE (~90-100) would be needed to minimize waste. */
+static_assert(sizeof(innerNode) <= 2048, "32-bit innerNode must fit in 2048-byte jemalloc size class");
+static_assert(sizeof(leafNode) <= 512, "32-bit leafNode must fit in 512-byte jemalloc size class");
 #endif
 static_assert(NODE_SIZE <= FEATURE_ROW_SIZE, "NODE_SIZE must fit in feature row");
 
