@@ -303,7 +303,7 @@ OrderedIndexItem *fbtreeOIPrev(OrderedIndexIterator *iter) {
 }
 
 void fbtreeOISeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    fbtreeSeekToRank((fbtreeIterator *)iter, rank - 1);
+    fbtreeSeekToRank((fbtreeIterator *)iter, rank);
 }
 
 void fbtreeOISeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
