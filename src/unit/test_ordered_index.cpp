@@ -1898,7 +1898,7 @@ TEST_P(OrderedIndexTest, CountLexRangeEmpty) {
 
 INSTANTIATE_TEST_SUITE_P(AllImplementations,
                          OrderedIndexTest,
-                         ::testing::Values(&skiplistImpl),
+                         ::testing::Values(&skiplistImpl, &fbtreeImpl),
                          orderedIndexTestName);
 
 /* ========== On-Delete Callback Tests ========== */
