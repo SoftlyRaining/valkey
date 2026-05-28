@@ -361,35 +361,78 @@ void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds
     fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
     fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);
     if (!fbt || fbtreeLength(fbt) == 0) return;
-    UNUSED(max_ex);
 
-    /* Get score prefix from first element */
+    /* Get score prefix from first element (all share same score in lex zsets) */
     const_sds first = fbtreeGetAtRank(fbt, 0);
     if (!first) return;
     uint64_t score_prefix;
     memcpy(&score_prefix, first, SCORE_SIZE);
 
-    /* Build packed value for seek */
-    const_sds target_ele = (offset >= 0) ? min : max;
-    sds packed = sdsempty();
-    packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(target_ele));
-    memcpy(packed, &score_prefix, SCORE_SIZE);
-    memcpy(packed + SCORE_SIZE, target_ele, sdslen(target_ele));
-    sdsIncrLen(packed, SCORE_SIZE + sdslen(target_ele));
+    unsigned long len = fbtreeLength(fbt);
 
-    fbtreeSeekToValue(packed, fbt_iter);
-    long base_rank = fbtreeGetRankOfItem(fbt, packed);
-    sdsfree(packed);
+    if (offset >= 0) {
+        /* Forward seek: position so that next() returns first element in range */
+        if (min == shared.minstring) {
+            fbtreeSeekToRank(fbt_iter, 0);
+        } else {
+            sds packed = sdsempty();
+            packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(min));
+            memcpy(packed, &score_prefix, SCORE_SIZE);
+            memcpy(packed + SCORE_SIZE, min, sdslen(min));
+            sdsIncrLen(packed, SCORE_SIZE + sdslen(min));
 
-    if (base_rank < 0) base_rank = 0;
-    long target = base_rank + offset;
-    if (min_ex && offset >= 0) target++;
-    if (!max_ex && offset < 0) target++;
+            fbtreeSeekToValue(packed, fbt_iter);
+            sdsfree(packed);
 
-    if (target < 0) {
-        fbtreeResetIterator(fbt_iter);
+            /* For exclusive min: if positioned at exact match, advance past it. */
+            if (min_ex) {
+                const_sds pos;
+                if (fbtreeNext(fbt_iter, &pos)) {
+                    const char *ele = pos + SCORE_SIZE;
+                    size_t ele_len = sdslen(pos) - SCORE_SIZE;
+                    if (ele_len != sdslen(min) || memcmp(ele, min, ele_len) != 0) {
+                        /* Not an exact match — re-seek to include this element */
+                        fbtreeSeekToValue(pos, fbt_iter);
+                    }
+                }
+            }
+        }
+        /* Apply LIMIT offset: skip 'offset' elements */
+        if (offset > 0) {
+            const_sds pos;
+            for (long i = 0; i < offset; i++) {
+                if (!fbtreeNext(fbt_iter, &pos)) return;
+            }
+        }
     } else {
-        fbtreeSeekToRank(fbt_iter, (unsigned long)target);
+        /* Reverse seek: position so that prev() returns last element in range */
+        if (max == shared.maxstring) {
+            fbtreeSeekToRank(fbt_iter, len);
+        } else {
+            sds packed = sdsempty();
+            packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(max) + 1);
+            memcpy(packed, &score_prefix, SCORE_SIZE);
+            memcpy(packed + SCORE_SIZE, max, sdslen(max));
+            sdsIncrLen(packed, SCORE_SIZE + sdslen(max));
+            if (!max_ex) {
+                /* Inclusive max: append 0xFF so we seek past max,
+                 * then prev() returns max itself. */
+                packed = sdscatlen(packed, "\xff", 1);
+            }
+            /* Exclusive max: seek to exact value, prev() returns element before it. */
+
+            fbtreeSeekToValue(packed, fbt_iter);
+            sdsfree(packed);
+        }
+        /* Apply LIMIT offset for reverse: offset is -(skip+1),
+         * so -1 = no skip, -2 = skip 1, etc. */
+        long skip = -(offset + 1);
+        if (skip > 0) {
+            const_sds pos;
+            for (long i = 0; i < skip; i++) {
+                if (!fbtreePrev(fbt_iter, &pos)) return;
+            }
+        }
     }
 }
 
