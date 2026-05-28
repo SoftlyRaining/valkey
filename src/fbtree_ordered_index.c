@@ -135,15 +135,15 @@ OrderedIndexItem *fbtreeOIInsertDetached(OrderedIndex *oi, OrderedIndexItem *ite
     return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, (sds)item);
 }
 
-/* Helper: range delete with on_delete callback */
+/* Helper: range delete with on_delete callback.
+ * The fbtree itself frees the sds after this callback returns,
+ * so we must NOT free here -- only notify the caller. */
 static void rangeDeleteCallback(sds item, void *ctx) {
     void **args = (void **)ctx;
     OrderedIndexOnDelete on_delete = (OrderedIndexOnDelete)args[0];
     void *user_ctx = args[1];
     if (on_delete) {
         on_delete((OrderedIndexItem *)item, user_ctx);
-    } else {
-        sdsfree(item);
     }
 }
 
@@ -475,5 +475,10 @@ unsigned long fbtreeOIScanDefrag(OrderedIndex *oi, unsigned long cursor, Ordered
 /* ========== Debug ========== */
 
 int fbtreeOIVerifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) {
-    return fbtreeDebugValidate((fbtreeIndex *)oi) ? 0 : (snprintf(errmsg, errmsg_len, "fbtree integrity check failed"), 1);
+    if (fbtreeDebugValidate((fbtreeIndex *)oi, false)) {
+        errmsg[0] = '\0';
+        return 1;
+    }
+    snprintf(errmsg, errmsg_len, "fbtree integrity check failed");
+    return 0;
 }
