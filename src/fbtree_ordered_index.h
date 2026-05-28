@@ -33,13 +33,13 @@ OrderedIndexItem *fbtreeOICreateDetached(double score, const char *ele, size_t l
 void fbtreeOIDetachedSetScore(OrderedIndexItem *item, double score);
 OrderedIndexItem *fbtreeOIInsertDetached(OrderedIndex *oi, OrderedIndexItem *item);
 unsigned long fbtreeOIDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
-unsigned long fbtreeOIDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
+unsigned long fbtreeOIDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx);
 unsigned long fbtreeOIDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx);
 
 /* Query */
 unsigned long fbtreeOILength(OrderedIndex *oi);
-OrderedIndexItem *fbtreeOIGetByRank(OrderedIndex *oi, unsigned long rank);
-unsigned long fbtreeOIGetRank(OrderedIndex *oi, const OrderedIndexItem *item);
+OrderedIndexItem *fbtreeOIGetByIndex(OrderedIndex *oi, unsigned long index);
+unsigned long fbtreeOIGetIndex(OrderedIndex *oi, const OrderedIndexItem *item);
 void fbtreeOIGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len);
 double fbtreeOIGetScore(const OrderedIndexItem *item);
 unsigned long fbtreeOICountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex);
@@ -50,7 +50,7 @@ void fbtreeOIInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi);
 void fbtreeOIResetIterator(OrderedIndexIterator *iter);
 OrderedIndexItem *fbtreeOINext(OrderedIndexIterator *iter);
 OrderedIndexItem *fbtreeOIPrev(OrderedIndexIterator *iter);
-void fbtreeOISeekToRank(OrderedIndexIterator *iter, unsigned long rank);
+void fbtreeOISeekToIndex(OrderedIndexIterator *iter, unsigned long index);
 void fbtreeOISeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset);
 void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset);
 

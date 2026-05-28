@@ -154,9 +154,9 @@ unsigned long fbtreeOIDeleteRangeByScore(OrderedIndex *oi, double min, double ma
     return fbtreeDeleteRangeByScore((fbtreeIndex *)oi, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex, rangeDeleteCallback, args);
 }
 
-unsigned long fbtreeOIDeleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
+unsigned long fbtreeOIDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
     void *args[2] = {(void *)on_delete, ctx};
-    return fbtreeDeleteRangeByRank((fbtreeIndex *)oi, start - 1, end - 1, rangeDeleteCallback, args);
+    return fbtreeDeleteRangeByRank((fbtreeIndex *)oi, start, end, rangeDeleteCallback, args);
 }
 
 unsigned long fbtreeOIDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
@@ -196,13 +196,13 @@ unsigned long fbtreeOILength(OrderedIndex *oi) {
     return fbtreeLength((fbtreeIndex *)oi);
 }
 
-OrderedIndexItem *fbtreeOIGetByRank(OrderedIndex *oi, unsigned long rank) {
-    return (OrderedIndexItem *)fbtreeGetAtRank((fbtreeIndex *)oi, rank - 1);
+OrderedIndexItem *fbtreeOIGetByIndex(OrderedIndex *oi, unsigned long index) {
+    return (OrderedIndexItem *)fbtreeGetAtRank((fbtreeIndex *)oi, index);
 }
 
-unsigned long fbtreeOIGetRank(OrderedIndex *oi, const OrderedIndexItem *item) {
+unsigned long fbtreeOIGetIndex(OrderedIndex *oi, const OrderedIndexItem *item) {
     long rank = fbtreeGetRankOfItem((fbtreeIndex *)oi, (const_sds)item);
-    return (unsigned long)(rank + 1);
+    return (unsigned long)rank;
 }
 
 void fbtreeOIGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len) {
@@ -302,8 +302,8 @@ OrderedIndexItem *fbtreeOIPrev(OrderedIndexIterator *iter) {
     return NULL;
 }
 
-void fbtreeOISeekToRank(OrderedIndexIterator *iter, unsigned long rank) {
-    fbtreeSeekToRank((fbtreeIterator *)iter, rank);
+void fbtreeOISeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
+    fbtreeSeekToRank((fbtreeIterator *)iter, index + 1);
 }
 
 void fbtreeOISeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {

@@ -203,8 +203,8 @@ class FbtreeOrderedIndex : public OrderedIndexTestApi {
     unsigned long deleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
         return fbtreeOIDeleteRangeByScore(oi, min, max, min_ex, max_ex, on_delete, ctx);
     }
-    unsigned long deleteRangeByRank(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return fbtreeOIDeleteRangeByRank(oi, start, end, on_delete, ctx);
+    unsigned long deleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
+        return fbtreeOIDeleteRangeByIndex(oi, start, end, on_delete, ctx);
     }
     unsigned long deleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
         return fbtreeOIDeleteRangeByLex(oi, min, max, min_ex, max_ex, on_delete, ctx);
@@ -213,11 +213,11 @@ class FbtreeOrderedIndex : public OrderedIndexTestApi {
     unsigned long length(OrderedIndex *oi) override {
         return fbtreeOILength(oi);
     }
-    OrderedIndexItem *getByRank(OrderedIndex *oi, unsigned long rank) override {
-        return fbtreeOIGetByRank(oi, rank);
+    OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long index) override {
+        return fbtreeOIGetByIndex(oi, index);
     }
-    unsigned long getRank(OrderedIndex *oi, const OrderedIndexItem *pos) override {
-        return fbtreeOIGetRank(oi, pos);
+    unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) override {
+        return fbtreeOIGetIndex(oi, pos);
     }
     void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) override {
         fbtreeOIGetElementRaw(pos, ptr, len);
@@ -253,8 +253,8 @@ class FbtreeOrderedIndex : public OrderedIndexTestApi {
     OrderedIndexItem *prev(OrderedIndexIterator *iter) override {
         return fbtreeOIPrev(iter);
     }
-    void seekToRank(OrderedIndexIterator *iter, unsigned long rank) override {
-        fbtreeOISeekToRank(iter, rank);
+    void seekToIndex(OrderedIndexIterator *iter, unsigned long index) override {
+        fbtreeOISeekToIndex(iter, index);
     }
     void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) override {
         fbtreeOISeekToScoreRange(iter, min, max, min_ex, max_ex, offset);
