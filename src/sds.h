@@ -118,6 +118,26 @@ static inline void sdsSetAuxBit(sds s, int bit, int value) {
     s[-1] = (char)flags;
 }
 
+/* ========== fbtree packed-sds marking ==========
+ * fbtree stores [8-byte score][element] as a single sds. The hashtable needs
+ * to hash/compare only the element portion. We mark these sds strings using
+ * aux bit 0. fbtree items must use sdshdr8 or larger (never sdshdr5) so that
+ * aux bits are available — the adapter ensures this at creation time. */
+#define SDS_FBTREE_SCORE_SIZE 8
+
+static inline int sdsIsFbtreeItem(const_sds s) {
+    unsigned char flags = s[-1];
+    unsigned char type = flags & SDS_TYPE_MASK;
+    if (type == SDS_TYPE_5) return 0;
+    return (flags >> SDS_TYPE_BITS) & 1U; /* aux bit 0 */
+}
+
+static inline void sdsSetFbtreeItem(sds s) {
+    unsigned char flags = s[-1];
+    /* Must not be sdshdr5 — caller ensures sdshdr8+ */
+    s[-1] = (char)(flags | (1 << SDS_TYPE_BITS));
+}
+
 /* The maximum length of a string that can be stored with the given SDS type. */
 static inline size_t sdsTypeMaxSize(char type) {
     if (type == SDS_TYPE_5) return (1 << 5) - 1;

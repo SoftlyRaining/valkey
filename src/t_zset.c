@@ -1088,9 +1088,8 @@ static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpac
         const char *ele_ptr_tmp;
         size_t ele_len_tmp;
         orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
-        sds ele = (sds)ele_ptr_tmp;
-        key->sval = (unsigned char *)ele;
-        key->slen = sdslen(ele);
+        key->sval = (unsigned char *)ele_ptr_tmp;
+        key->slen = ele_len_tmp;
         if (score) *score = orderedIndexGetScore(node);
     } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
         listpackEntry val;
@@ -1297,7 +1296,13 @@ static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     const char *ptr;
     size_t len;
     orderedIndexGetElementRaw(item, &ptr, &len);
+#ifdef ORDERED_INDEX_FBTREE
+    sds tmp = sdsnewlen(ptr, len);
+    hashtableDelete(ht, tmp);
+    sdsfree(tmp);
+#else
     hashtableDelete(ht, (sds)ptr);
+#endif
     orderedIndexFreeItem(item);
 }
 
@@ -1617,7 +1622,12 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
             const char *val_ele_ptr;
             size_t val_ele_len;
             orderedIndexGetElementRaw(it->sl.node, &val_ele_ptr, &val_ele_len);
+#ifdef ORDERED_INDEX_FBTREE
+            val->ele = sdsnewlen(val_ele_ptr, val_ele_len);
+            val->flags |= OPVAL_DIRTY_SDS;
+#else
             val->ele = (sds)val_ele_ptr;
+#endif
             val->score = orderedIndexGetScore(it->sl.node);
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -1745,10 +1755,8 @@ static size_t zsetHashtableGetMaxElementLength(hashtable *ht, size_t *totallen) 
         const char *ele_ptr_tmp;
         size_t ele_len_tmp;
         orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
-        sds ele = (sds)ele_ptr_tmp;
-        size_t elelen = sdslen(ele);
-        if (elelen > maxelelen) maxelelen = elelen;
-        if (totallen) (*totallen) += elelen;
+        if (ele_len_tmp > maxelelen) maxelelen = ele_len_tmp;
+        if (totallen) (*totallen) += ele_len_tmp;
     }
     hashtableCleanupIterator(&iter);
 
@@ -2141,10 +2149,9 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                     const char *ele_ptr_tmp;
                     size_t ele_len_tmp;
                     orderedIndexGetElementRaw(new_node, &ele_ptr_tmp, &ele_len_tmp);
-                    sds ele = (sds)ele_ptr_tmp;
-                    totelelen += sdslen(ele);
-                    if (sdslen(ele) > maxelelen) {
-                        maxelelen = sdslen(ele);
+                    totelelen += ele_len_tmp;
+                    if (ele_len_tmp > maxelelen) {
+                        maxelelen = ele_len_tmp;
                     }
                 } else {
                     /* Update the score with the score of the new instance
@@ -3491,8 +3498,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 const char *ele_ptr_tmp;
                 size_t ele_len_tmp;
                 orderedIndexGetElementRaw(node, &ele_ptr_tmp, &ele_len_tmp);
-                sds ele = (sds)ele_ptr_tmp;
-                addReplyBulkCBuffer(c, ele, sdslen(ele));
+                addReplyBulkCBuffer(c, ele_ptr_tmp, ele_len_tmp);
                 if (withscores) addReplyDouble(c, orderedIndexGetScore(node));
                 if (c->flag.close_asap) break;
             }
@@ -3594,7 +3600,13 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             const char *del_ele_ptr;
             size_t del_ele_len;
             orderedIndexGetElementRaw((OrderedIndexItem *)element, &del_ele_ptr, &del_ele_len);
+#ifdef ORDERED_INDEX_FBTREE
+            sds del_tmp = sdsnewlen(del_ele_ptr, del_ele_len);
+            hashtableDelete(ht, del_tmp);
+            sdsfree(del_tmp);
+#else
             hashtableDelete(ht, (sds)del_ele_ptr);
+#endif
             size--;
         }
         hashtableCleanupIterator(&iter);
@@ -3607,9 +3619,8 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             const char *key_ptr_tmp;
             size_t key_len_tmp;
             orderedIndexGetElementRaw(node, &key_ptr_tmp, &key_len_tmp);
-            sds key = (sds)key_ptr_tmp;
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-            addReplyBulkCBuffer(c, key, sdslen(key));
+            addReplyBulkCBuffer(c, key_ptr_tmp, key_len_tmp);
             if (withscores) addReplyDouble(c, orderedIndexGetScore(node));
         }
 
@@ -3629,7 +3640,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
 
         while (added < count) {
             listpackEntry key;
-            double score;
+            double score = 0;
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists

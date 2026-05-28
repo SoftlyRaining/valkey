@@ -5316,7 +5316,14 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexGetElementRaw(next, &ele, &ele_len);
+#ifdef ORDERED_INDEX_FBTREE
+                sds tmp_ele_next = sdsnewlen(ele, ele_len);
+                int in_range_next = zslLexValueLteMax(tmp_ele_next, &key->u.zset.lrs);
+                sdsfree(tmp_ele_next);
+                if (!in_range_next) {
+#else
                 if (!zslLexValueLteMax((sds)ele, &key->u.zset.lrs)) {
+#endif
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5381,7 +5388,14 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 const char *ele;
                 size_t ele_len;
                 orderedIndexGetElementRaw(prev, &ele, &ele_len);
+#ifdef ORDERED_INDEX_FBTREE
+                sds tmp_ele_prev = sdsnewlen(ele, ele_len);
+                int in_range_prev = zslLexValueGteMin(tmp_ele_prev, &key->u.zset.lrs);
+                sdsfree(tmp_ele_prev);
+                if (!in_range_prev) {
+#else
                 if (!zslLexValueGteMin((sds)ele, &key->u.zset.lrs)) {
+#endif
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -12025,7 +12039,11 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         const char *ele;
         size_t ele_len;
         orderedIndexGetElementRaw((const OrderedIndexItem *)entry, &ele, &ele_len);
+#ifdef ORDERED_INDEX_FBTREE
+        key = sdsnewlen(ele, ele_len);
+#else
         key = (sds)ele;
+#endif
         value = createStringObjectFromLongDouble(orderedIndexGetScore((const OrderedIndexItem *)entry), 0);
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
