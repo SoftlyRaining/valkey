@@ -22,6 +22,13 @@ static_assert(sizeof(OrderedIndexIterator) >= sizeof(fbtreeIterator),
 
 #define SCORE_SIZE 8 /* Normalized score prefix size */
 
+/* Mark/check packed sds as fbtree items using aux bit 0.
+ * The hashtable uses this to hash/compare only the element portion. */
+static inline void sdsSetFbtreeItem(sds s) {
+    unsigned char flags = s[-1];
+    s[-1] = (char)(flags | (1 << SDS_TYPE_BITS));
+}
+
 /* ========== Score Normalization ==========
  * Converts IEEE 754 double to a sortable 8-byte big-endian representation.
  * Lexicographic byte comparison matches numeric order after transformation. */
