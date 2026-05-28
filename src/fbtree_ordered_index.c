@@ -332,13 +332,29 @@ void fbtreeOISeekToScoreRange(OrderedIndexIterator *iter, double min, double max
             sortable = htonu64(native);
         }
     }
-    long target = offset + fbtreeSeekToScore((const char *)&sortable, fbt_iter);
+    unsigned long len = fbtreeLength(fbt);
+    long base = fbtreeSeekToScore((const char *)&sortable, fbt_iter);
+    long target = offset + base;
 
-    if (target < 0) {
+    if (target < 0 || (unsigned long)target >= len) {
         fbtreeResetIterator(fbt_iter);
-    } else {
-        fbtreeSeekToRank(fbt_iter, (unsigned long)target);
+        return;
     }
+
+    /* Validate the element at target is within [min, max]. */
+    const_sds item = fbtreeGetAtRank(fbt, (unsigned long)target);
+    if (item) {
+        double score = unpackScore(item);
+        if (score > max || (max_ex && score == max) ||
+            score < min || (min_ex && score == min)) {
+            fbtreeResetIterator(fbt_iter);
+            return;
+        }
+    }
+
+    /* For reverse (offset<0), fbtreePrev decrements before returning,
+     * so position one past the target for prev() to return it. */
+    fbtreeSeekToRank(fbt_iter, (unsigned long)target + (offset < 0 ? 1 : 0));
 }
 
 void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {

@@ -557,6 +557,7 @@ ENGINE_SERVER_OBJ = \
     siphash.o \
     skiplist_ordered_index.o \
     fbtree.o \
+    fbtree_ordered_index.o \
     ordered_index.o \
     socket.o \
     sort.o \
