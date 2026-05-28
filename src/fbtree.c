@@ -60,6 +60,33 @@ static inline iter *iteratorFromOpaque(fbtreeIterator *iterator) {
     return (iter *)(void *)iterator;
 }
 
+/* Get low_key (minimum) from leaf node - leaves are always kept sorted */
+static sds leafNodeLowKey(leafNode *leaf) {
+    return (leaf->header.num_items == 0) ? NULL : leaf->values[0];
+}
+
+/* Get high_key pointer from leaf node */
+static sds leafNodeHighKey(leafNode *leaf) {
+    return (leaf->header.num_items == 0) ? NULL : leaf->values[leaf->header.num_items - 1];
+}
+
+/* Get high_key (maximum anchor) from any node type */
+static sds nodeHighKey(node *n) {
+    if (n->is_leaf) {
+        return leafNodeHighKey((leafNode *)n);
+    }
+    innerNode *inner = (innerNode *)n;
+    return (inner->header.num_items == 0) ? NULL : inner->anchors[inner->header.num_items - 1];
+}
+
+/* Get feature byte j from string s, biased for SIMD signed comparison.
+ * Returns 0 ^ FEATURE_BIAS if the string is shorter than prefix_len + j. */
+static char getFeatureByte(const_sds s, size_t prefix_len, int j) {
+    size_t idx = prefix_len + j;
+    unsigned char raw = (idx < sdslen(s)) ? (unsigned char)s[idx] : 0;
+    return (char)(raw ^ FEATURE_BIAS);
+}
+
 
 static inline bool innerNodeHasLongPrefix(innerNode *inner) {
     return inner->prefix_len > EMBED_PREFIX_LEN;
