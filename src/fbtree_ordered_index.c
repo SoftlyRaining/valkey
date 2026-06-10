@@ -170,28 +170,40 @@ unsigned long fbtreeOIDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, 
 }
 
 unsigned long fbtreeOIDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    /* Lex range: all items share the same score (zset lex semantics).
-     * Get the score from the first element to build proper packed bounds. */
+    /* Lex range: all items share the same score (zset lex semantics). */
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
     if (fbtreeLength(fbt) == 0) return 0;
+    if (max == shared.minstring || min == shared.maxstring) return 0;
 
     const_sds first = fbtreeGetAtRank(fbt, 0);
     if (!first) return 0;
-    /* Extract the score prefix from any existing element */
     uint64_t score_prefix;
     memcpy(&score_prefix, first, SCORE_SIZE);
 
-    sds min_packed = sdsempty();
-    min_packed = sdsMakeRoomFor(min_packed, SCORE_SIZE + sdslen(min));
-    memcpy(min_packed, &score_prefix, SCORE_SIZE);
-    memcpy(min_packed + SCORE_SIZE, min, sdslen(min));
-    sdsIncrLen(min_packed, SCORE_SIZE + sdslen(min));
+    sds min_packed, max_packed;
 
-    sds max_packed = sdsempty();
-    max_packed = sdsMakeRoomFor(max_packed, SCORE_SIZE + sdslen(max));
-    memcpy(max_packed, &score_prefix, SCORE_SIZE);
-    memcpy(max_packed + SCORE_SIZE, max, sdslen(max));
-    sdsIncrLen(max_packed, SCORE_SIZE + sdslen(max));
+    if (min == shared.minstring) {
+        min_packed = sdsnewlen(NULL, SCORE_SIZE);
+        memcpy(min_packed, &score_prefix, SCORE_SIZE);
+    } else {
+        min_packed = sdsempty();
+        min_packed = sdsMakeRoomFor(min_packed, SCORE_SIZE + sdslen(min));
+        memcpy(min_packed, &score_prefix, SCORE_SIZE);
+        memcpy(min_packed + SCORE_SIZE, min, sdslen(min));
+        sdsIncrLen(min_packed, SCORE_SIZE + sdslen(min));
+    }
+
+    if (max == shared.maxstring) {
+        max_packed = sdsnewlen(NULL, SCORE_SIZE + 1);
+        memcpy(max_packed, &score_prefix, SCORE_SIZE);
+        memset(max_packed + SCORE_SIZE, 0xFF, 1);
+    } else {
+        max_packed = sdsempty();
+        max_packed = sdsMakeRoomFor(max_packed, SCORE_SIZE + sdslen(max));
+        memcpy(max_packed, &score_prefix, SCORE_SIZE);
+        memcpy(max_packed + SCORE_SIZE, max, sdslen(max));
+        sdsIncrLen(max_packed, SCORE_SIZE + sdslen(max));
+    }
 
     rangeDeleteArgs args = {on_delete, ctx};
     unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex, rangeDeleteCallback, &args);
@@ -250,7 +262,12 @@ unsigned long fbtreeOICountScoreRange(OrderedIndex *oi, double min, double max, 
 unsigned long fbtreeOICountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
     /* Lex range: all items have same score, sorted by element. */
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
-    if (fbtreeLength(fbt) == 0) return 0;
+    unsigned long len = fbtreeLength(fbt);
+    if (len == 0) return 0;
+
+    /* Handle sentinels: shared.minstring/maxstring represent -inf/+inf */
+    if (min == shared.minstring && max == shared.maxstring) return len;
+    if (max == shared.minstring || min == shared.maxstring) return 0;
 
     const_sds first = fbtreeGetAtRank(fbt, 0);
     if (!first) return 0;
@@ -260,23 +277,32 @@ unsigned long fbtreeOICountLexRange(OrderedIndex *oi, const_sds min, const_sds m
     fbtreeIterator iter;
     fbtreeInitIterator(&iter, fbt);
 
-    sds min_packed = sdsempty();
-    min_packed = sdsMakeRoomFor(min_packed, SCORE_SIZE + sdslen(min));
-    memcpy(min_packed, &score_prefix, SCORE_SIZE);
-    memcpy(min_packed + SCORE_SIZE, min, sdslen(min));
-    sdsIncrLen(min_packed, SCORE_SIZE + sdslen(min));
-    fbtreeSeekToValue(min_packed, &iter);
-    sdsfree(min_packed);
+    /* Seek to start position */
+    if (min == shared.minstring) {
+        fbtreeSeekToRank(&iter, 0);
+    } else {
+        sds min_packed = sdsempty();
+        min_packed = sdsMakeRoomFor(min_packed, SCORE_SIZE + sdslen(min));
+        memcpy(min_packed, &score_prefix, SCORE_SIZE);
+        memcpy(min_packed + SCORE_SIZE, min, sdslen(min));
+        sdsIncrLen(min_packed, SCORE_SIZE + sdslen(min));
+        fbtreeSeekToValue(min_packed, &iter);
+        sdsfree(min_packed);
+    }
 
     unsigned long count = 0;
     const_sds pos;
     while (fbtreeNext(&iter, &pos)) {
         const char *ele = pos + SCORE_SIZE;
         size_t ele_len = sdslen(pos) - SCORE_SIZE;
-        int cmp = memcmp(ele, max, ele_len < sdslen(max) ? ele_len : sdslen(max));
-        if (cmp == 0) cmp = (int)ele_len - (int)sdslen(max);
-        if (max_ex ? cmp >= 0 : cmp > 0) break;
-        if (min_ex && count == 0) {
+        /* Check max bound (skip if max is +inf sentinel) */
+        if (max != shared.maxstring) {
+            int cmp = memcmp(ele, max, ele_len < sdslen(max) ? ele_len : sdslen(max));
+            if (cmp == 0) cmp = (int)ele_len - (int)sdslen(max);
+            if (max_ex ? cmp >= 0 : cmp > 0) break;
+        }
+        /* Check min exclusive */
+        if (min_ex && min != shared.minstring && count == 0) {
             int cmp_min = memcmp(ele, min, ele_len < sdslen(min) ? ele_len : sdslen(min));
             if (cmp_min == 0) cmp_min = (int)ele_len - (int)sdslen(min);
             if (cmp_min == 0) continue;
