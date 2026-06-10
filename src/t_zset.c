@@ -1317,14 +1317,11 @@ typedef enum {
     ZRANGE_LEX,
 } zrange_type;
 
-/* Callback for orderedIndexDeleteRangeBy* — removes the item from the hashtable
- * and frees it. The callback receives ownership per the API contract. */
+/* Callback for orderedIndexDeleteRangeBy* — removes the item from the hashtable.
+ * The ordered index frees the item after this callback returns. */
 static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     hashtable *ht = ctx;
-    const char *ptr;
-    size_t len;
-    orderedIndexGetElementRaw(item, &ptr, &len);
-    hashtableDelete(ht, (sds)ptr);
+    hashtableDelete(ht, item);
 }
 
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
@@ -1527,6 +1524,7 @@ static void zuiInitIterator(zsetopsrc *op) {
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             it->sl.zs = objectGetVal(op->subject);
             orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
+            orderedIndexSeekToIndex(&it->sl.iter, orderedIndexLength(it->sl.zs->oi) - 1);
             it->sl.node = NULL;
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -3287,7 +3285,7 @@ void genericZpopCommand(client *c,
             OrderedIndexItem *zln;
 
             /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
+            zln = (where == ZSET_MAX ? orderedIndexGetByIndex(oi, orderedIndexLength(oi) - 1) : orderedIndexGetByIndex(oi, 0));
 
             /* There must be an element in the sorted set. */
             serverAssertWithInfo(c, zobj, zln != NULL);
@@ -3606,10 +3604,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-            const char *del_ele_ptr;
-            size_t del_ele_len;
-            orderedIndexGetElementRaw((OrderedIndexItem *)element, &del_ele_ptr, &del_ele_len);
-            hashtableDelete(ht, (sds)del_ele_ptr);
+            hashtableDelete(ht, element);
             size--;
         }
         hashtableCleanupIterator(&iter);

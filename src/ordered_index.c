@@ -80,11 +80,11 @@ OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long index) 
 }
 
 OrderedIndexItem *orderedIndexGetFirst(OrderedIndex *oi) {
-    return skiplistGetFirst(oi);
+    return fbtreeOIGetFirst(oi);
 }
 
 OrderedIndexItem *orderedIndexGetLast(OrderedIndex *oi) {
-    return skiplistGetLast(oi);
+    return fbtreeOIGetLast(oi);
 }
 
 unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item) {
