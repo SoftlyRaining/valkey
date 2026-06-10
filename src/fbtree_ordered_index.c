@@ -145,25 +145,28 @@ OrderedIndexItem *fbtreeOIInsertDetached(OrderedIndex *oi, OrderedIndexItem *ite
 /* Helper: range delete with on_delete callback.
  * The fbtree itself frees the sds after this callback returns,
  * so we must NOT free here -- only notify the caller. */
+typedef struct {
+    OrderedIndexOnDelete on_delete;
+    void *user_ctx;
+} rangeDeleteArgs;
+
 static void rangeDeleteCallback(sds item, void *ctx) {
-    void **args = (void **)ctx;
-    OrderedIndexOnDelete on_delete = (OrderedIndexOnDelete)args[0];
-    void *user_ctx = args[1];
-    if (on_delete) {
-        on_delete((OrderedIndexItem *)item, user_ctx);
+    rangeDeleteArgs *args = (rangeDeleteArgs *)ctx;
+    if (args->on_delete) {
+        args->on_delete((OrderedIndexItem *)item, args->user_ctx);
     }
 }
 
 unsigned long fbtreeOIDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
     uint64_t min_sortable = scoreToSortable(min);
     uint64_t max_sortable = scoreToSortable(max);
-    void *args[2] = {(void *)on_delete, ctx};
-    return fbtreeDeleteRangeByScore((fbtreeIndex *)oi, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex, rangeDeleteCallback, args);
+    rangeDeleteArgs args = {on_delete, ctx};
+    return fbtreeDeleteRangeByScore((fbtreeIndex *)oi, (const char *)&min_sortable, (const char *)&max_sortable, min_ex, max_ex, rangeDeleteCallback, &args);
 }
 
 unsigned long fbtreeOIDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
-    void *args[2] = {(void *)on_delete, ctx};
-    return fbtreeDeleteRangeByRank((fbtreeIndex *)oi, start, end, rangeDeleteCallback, args);
+    rangeDeleteArgs args = {on_delete, ctx};
+    return fbtreeDeleteRangeByRank((fbtreeIndex *)oi, start, end, rangeDeleteCallback, &args);
 }
 
 unsigned long fbtreeOIDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
@@ -190,8 +193,8 @@ unsigned long fbtreeOIDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sd
     memcpy(max_packed + SCORE_SIZE, max, sdslen(max));
     sdsIncrLen(max_packed, SCORE_SIZE + sdslen(max));
 
-    void *args[2] = {(void *)on_delete, ctx};
-    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex, rangeDeleteCallback, args);
+    rangeDeleteArgs args = {on_delete, ctx};
+    unsigned long deleted = fbtreeDeleteRangeByValue(fbt, min_packed, max_packed, min_ex, max_ex, rangeDeleteCallback, &args);
     sdsfree(min_packed);
     sdsfree(max_packed);
     return deleted;
