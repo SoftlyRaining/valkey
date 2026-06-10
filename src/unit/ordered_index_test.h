@@ -10,9 +10,9 @@
  */
 
 extern "C" {
+#include "fbtree_ordered_index.h"
 #include "ordered_index.h"
 #include "skiplist_ordered_index.h"
-#include "fbtree_ordered_index.h"
 }
 
 #include <string>
