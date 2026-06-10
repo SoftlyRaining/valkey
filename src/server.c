@@ -636,10 +636,36 @@ static const char *zsetExtractElement(const void *key, size_t *len) {
 }
 
 const void *zsetHashtableGetKey(const void *element) {
-    const char *ptr;
+    return element; /* The entry IS the key (packed sds for fbtree, plain sds for skiplist) */
+}
+
+/* Hash/compare for zset hashtable entries. Fbtree items are packed sds with
+ * [8-byte score][element] marked via aux bit 0. Plain sds keys (used for
+ * lookups) have no aux bit set. Both cases must produce the same hash for
+ * the same element bytes. */
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (sdsGetAuxBit(s, 0)) {
+        /* Packed fbtree item: skip 8-byte score prefix */
+        *len = sdslen(s) - 8;
+        return s + 8;
+    }
+    *len = sdslen(s);
+    return s;
+}
+
+static uint64_t zsetHashFunction(const void *key) {
     size_t len;
-    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
-    return ptr;
+    const char *ptr = zsetExtractElement(key, &len);
+    return genHashFunctionConfigurableSeed(ptr, len);
+}
+
+static int zsetKeyCompare(const void *key1, const void *key2) {
+    size_t len1, len2;
+    const char *ptr1 = zsetExtractElement(key1, &len1);
+    const char *ptr2 = zsetExtractElement(key2, &len2);
+    if (len1 != len2) return 0;
+    return memcmp(ptr1, ptr2, len1) == 0;
 }
 
 static uint64_t zsetHashFunction(const void *key) {
