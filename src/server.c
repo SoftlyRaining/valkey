@@ -636,9 +636,17 @@ static const char *zsetExtractElement(const void *key, size_t *len) {
 }
 
 const void *zsetHashtableGetKey(const void *element) {
-    return element; /* The entry IS the key (packed sds for fbtree, plain sds for skiplist) */
+#ifdef ORDERED_INDEX_SKIPLIST
+    const char *ptr;
+    size_t len;
+    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
+    return ptr;
+#else
+    return element; /* Fbtree: the packed sds IS the key (aux-bit hash/compare handles it) */
+#endif
 }
 
+#ifndef ORDERED_INDEX_SKIPLIST
 /* Hash/compare for zset hashtable entries. Fbtree items are packed sds with
  * [8-byte score][element] marked via aux bit 0. Plain sds keys (used for
  * lookups) have no aux bit set. Both cases must produce the same hash for
@@ -688,6 +696,14 @@ hashtableType zsetHashtableType = {
     .entryGetKey = zsetHashtableGetKey,
     .keyCompare = zsetKeyCompare,
 };
+#else
+/* Sorted sets hash (an ordered index is used in addition to the hash table) */
+hashtableType zsetHashtableType = {
+    .hashFunction = sdsHashConfigurableSeed,
+    .entryGetKey = zsetHashtableGetKey,
+    .keyCompare = dictSdsKeyCompare,
+};
+#endif
 
 uint64_t hashtableSdsHash(const void *key) {
     return hashtableGenHashFunction((const char *)key, sdslen((char *)key));

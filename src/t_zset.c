@@ -1321,7 +1321,14 @@ typedef enum {
  * The ordered index frees the item after this callback returns. */
 static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     hashtable *ht = ctx;
+#ifdef ORDERED_INDEX_SKIPLIST
+    const char *ptr;
+    size_t len;
+    orderedIndexGetElementRaw(item, &ptr, &len);
+    hashtableDelete(ht, (sds)ptr);
+#else
     hashtableDelete(ht, item);
+#endif
 }
 
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
@@ -1524,7 +1531,6 @@ static void zuiInitIterator(zsetopsrc *op) {
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             it->sl.zs = objectGetVal(op->subject);
             orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
-            orderedIndexSeekToIndex(&it->sl.iter, orderedIndexLength(it->sl.zs->oi) - 1);
             it->sl.node = NULL;
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -3285,7 +3291,7 @@ void genericZpopCommand(client *c,
             OrderedIndexItem *zln;
 
             /* Get the first or last element in the sorted set. */
-            zln = (where == ZSET_MAX ? orderedIndexGetByIndex(oi, orderedIndexLength(oi) - 1) : orderedIndexGetByIndex(oi, 0));
+            zln = (where == ZSET_MAX ? orderedIndexGetLast(oi) : orderedIndexGetFirst(oi));
 
             /* There must be an element in the sorted set. */
             serverAssertWithInfo(c, zobj, zln != NULL);
@@ -3604,7 +3610,14 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
+#ifdef ORDERED_INDEX_SKIPLIST
+            const char *key_ptr;
+            size_t key_len;
+            orderedIndexGetElementRaw(element, &key_ptr, &key_len);
+            hashtableDelete(ht, (sds)key_ptr);
+#else
             hashtableDelete(ht, element);
+#endif
             size--;
         }
         hashtableCleanupIterator(&iter);
