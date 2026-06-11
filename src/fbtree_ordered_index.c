@@ -454,19 +454,31 @@ void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds
             fbtreeSeekToRank(fbt_iter, len);
         } else {
             sds packed = sdsempty();
-            packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(max) + 1);
+            packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(max));
             memcpy(packed, &score_prefix, SCORE_SIZE);
             memcpy(packed + SCORE_SIZE, max, sdslen(max));
             sdsIncrLen(packed, SCORE_SIZE + sdslen(max));
-            if (!max_ex) {
-                /* Inclusive max: append 0xFF so we seek past max,
-                 * then prev() returns max itself. */
-                packed = sdscatlen(packed, "\xff", 1);
-            }
-            /* Exclusive max: seek to exact value, prev() returns element before it. */
 
             fbtreeSeekToValue(packed, fbt_iter);
             sdsfree(packed);
+
+            if (!max_ex) {
+                /* Inclusive max: seek positioned at first >= max.
+                 * If max exists, advance past it so prev() returns max.
+                 * If max doesn't exist, re-seek to first > max so prev()
+                 * returns last element < max. */
+                const_sds pos;
+                if (fbtreeNext(fbt_iter, &pos)) {
+                    const char *ele = pos + SCORE_SIZE;
+                    size_t ele_len = sdslen(pos) - SCORE_SIZE;
+                    if (ele_len != sdslen(max) || memcmp(ele, max, ele_len) != 0) {
+                        /* Not exact match — re-seek so prev() returns last < max */
+                        fbtreeSeekToValue(pos, fbt_iter);
+                    }
+                    /* Else: exact match consumed, prev() now returns max. */
+                }
+            }
+            /* Exclusive max: seek to exact value, prev() returns element before it. */
         }
         /* Apply LIMIT offset for reverse: offset is -(skip+1),
          * so -1 = no skip, -2 = skip 1, etc. */
