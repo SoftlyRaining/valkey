@@ -26,6 +26,8 @@ void fbtreeOIFree(OrderedIndex *oi);
 OrderedIndexItem *fbtreeOIInsert(OrderedIndex *oi, double score, const char *ele, size_t len);
 void fbtreeOIDelete(OrderedIndex *oi, OrderedIndexItem *item);
 OrderedIndexItem *fbtreeOIUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore);
+OrderedIndexItem *fbtreeOIGetFirst(OrderedIndex *oi);
+OrderedIndexItem *fbtreeOIGetLast(OrderedIndex *oi);
 OrderedIndexItem *fbtreeOIPopFirst(OrderedIndex *oi);
 OrderedIndexItem *fbtreeOIPopLast(OrderedIndex *oi);
 void fbtreeOIFreeItem(OrderedIndexItem *item);

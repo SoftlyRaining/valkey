@@ -20,6 +20,8 @@ sds fbtreeInsert(fbtreeIndex *fbt, sds string);
 bool fbtreeDelete(fbtreeIndex *fbt, const_sds key);
 sds fbtreePopMin(fbtreeIndex *fbt);
 sds fbtreePopMax(fbtreeIndex *fbt);
+const_sds fbtreePeekMin(fbtreeIndex *fbt);
+const_sds fbtreePeekMax(fbtreeIndex *fbt);
 void fbtreeEmpty(fbtreeIndex *fbt);
 void fbtreeFree(fbtreeIndex *fbt);
 unsigned long fbtreeLength(fbtreeIndex *fbt);

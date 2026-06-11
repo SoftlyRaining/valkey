@@ -216,6 +216,12 @@ class FbtreeOrderedIndex : public OrderedIndexTestApi {
     OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long index) override {
         return fbtreeOIGetByIndex(oi, index);
     }
+    OrderedIndexItem *getFirst(OrderedIndex *oi) override {
+        return fbtreeOIGetFirst(oi);
+    }
+    OrderedIndexItem *getLast(OrderedIndex *oi) override {
+        return fbtreeOIGetLast(oi);
+    }
     unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) override {
         return fbtreeOIGetIndex(oi, pos);
     }

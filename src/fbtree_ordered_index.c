@@ -117,6 +117,14 @@ OrderedIndexItem *fbtreeOIUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, 
     return (OrderedIndexItem *)fbtreeInsert((fbtreeIndex *)oi, new_packed);
 }
 
+OrderedIndexItem *fbtreeOIGetFirst(OrderedIndex *oi) {
+    return (OrderedIndexItem *)fbtreePeekMin((fbtreeIndex *)oi);
+}
+
+OrderedIndexItem *fbtreeOIGetLast(OrderedIndex *oi) {
+    return (OrderedIndexItem *)fbtreePeekMax((fbtreeIndex *)oi);
+}
+
 OrderedIndexItem *fbtreeOIPopFirst(OrderedIndex *oi) {
     return (OrderedIndexItem *)fbtreePopMin((fbtreeIndex *)oi);
 }

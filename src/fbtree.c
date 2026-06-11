@@ -1094,6 +1094,16 @@ sds fbtreePopMax(fbtreeIndex *fbt) {
     return item;
 }
 
+const_sds fbtreePeekMin(fbtreeIndex *fbt) {
+    if (!fbt->leftmost_leaf || fbt->leftmost_leaf->header.num_items == 0) return NULL;
+    return fbt->leftmost_leaf->values[0];
+}
+
+const_sds fbtreePeekMax(fbtreeIndex *fbt) {
+    if (!fbt->rightmost_leaf || fbt->rightmost_leaf->header.num_items == 0) return NULL;
+    return fbt->rightmost_leaf->values[fbt->rightmost_leaf->header.num_items - 1];
+}
+
 /* Get element at given rank (0-indexed). Returns NULL if rank >= length */
 const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank) {
     if (!fbt->root) return NULL;
