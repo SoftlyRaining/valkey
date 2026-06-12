@@ -495,9 +495,7 @@ void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds
 /* ========== Memory ========== */
 
 void fbtreeOIDismissMemory(OrderedIndex *oi) {
-    /* fbtree nodes are allocated individually — would need to walk all nodes.
-     * For now, no-op. Can be implemented when needed. */
-    UNUSED(oi);
+    fbtreeDismissMemory((fbtreeIndex *)oi);
 }
 
 size_t fbtreeOIEstimateMemory(OrderedIndex *oi, size_t sample_size) {
@@ -517,15 +515,20 @@ OrderedIndex *fbtreeOIDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *
     return newptr ? (OrderedIndex *)newptr : oi;
 }
 
+/* Wrapper context to bridge fbtree's (sds,sds) callback to OrderedIndexDefragCallback. */
+typedef struct {
+    OrderedIndexDefragCallback callback;
+    void *ctx;
+} defragBridgeCtx;
+
+static void defragBridgeCallback(sds old_item, sds new_item, void *ctx) {
+    defragBridgeCtx *bridge = ctx;
+    bridge->callback((OrderedIndexItem *)old_item, (OrderedIndexItem *)new_item, bridge->ctx);
+}
+
 unsigned long fbtreeOIScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
-    /* TODO: implement incremental defrag scan over fbtree leaf nodes.
-     * For now, no-op — returns 0 (complete). */
-    UNUSED(oi);
-    UNUSED(cursor);
-    UNUSED(callback);
-    UNUSED(ctx);
-    UNUSED(defragfn);
-    return 0;
+    defragBridgeCtx bridge = {callback, ctx};
+    return fbtreeDefragScan((fbtreeIndex *)oi, cursor, defragBridgeCallback, &bridge, defragfn);
 }
 
 /* ========== Debug ========== */

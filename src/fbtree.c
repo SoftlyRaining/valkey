@@ -2222,3 +2222,54 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
 
     return result.valid && length_ok && caches_ok;
 }
+
+/* ========== Defrag / Dismiss ========== */
+
+unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor,
+                               void (*item_callback)(sds old_item, sds new_item, void *ctx),
+                               void *ctx, void *(*defragfn)(void *)) {
+    if (!fbt || !fbt->leftmost_leaf) return 0;
+
+    /* cursor encodes (leaf_index << 8 | item_index). 0 = start. */
+    unsigned long leaf_idx = cursor >> 8;
+    unsigned int item_idx = cursor & 0xFF;
+
+    /* Walk to the target leaf */
+    leafNode *leaf = fbt->leftmost_leaf;
+    for (unsigned long i = 0; i < leaf_idx && leaf; i++) {
+        leaf = leaf->next;
+    }
+    if (!leaf) return 0;
+
+    unsigned long count = 0;
+    while (leaf && count < 16) {
+        while (item_idx < leaf->header.num_items && count < 16) {
+            sds old_item = leaf->values[item_idx];
+            sds new_item = defragfn(old_item);
+            if (new_item) {
+                leaf->values[item_idx] = new_item;
+                item_callback(old_item, new_item, ctx);
+            }
+            item_idx++;
+            count++;
+        }
+        if (item_idx >= leaf->header.num_items) {
+            leaf = leaf->next;
+            leaf_idx++;
+            item_idx = 0;
+        }
+    }
+
+    if (!leaf) return 0; /* done */
+    return (leaf_idx << 8) | item_idx;
+}
+
+void fbtreeDismissMemory(fbtreeIndex *fbt) {
+    if (!fbt) return;
+    leafNode *leaf = fbt->leftmost_leaf;
+    while (leaf) {
+        leafNode *next = leaf->next;
+        zmadvise_dontneed(leaf, 0);
+        leaf = next;
+    }
+}
