@@ -236,9 +236,7 @@ unsigned long fbtreeOIGetIndex(OrderedIndex *oi, const OrderedIndexItem *item) {
 }
 
 void fbtreeOIGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len) {
-    const_sds packed = (const_sds)item;
-    *len = sdslen(packed) - SCORE_SIZE;
-    *ptr = packed + SCORE_SIZE;
+    *ptr = unpackElement((const_sds)item, len);
 }
 
 double fbtreeOIGetScore(const OrderedIndexItem *item) {
@@ -267,8 +265,69 @@ unsigned long fbtreeOICountScoreRange(OrderedIndex *oi, double min, double max, 
     return count;
 }
 
+/* ========== Range Seek Helpers ========== */
+
+/* Unified seek helper: position iterator at a range boundary.
+ *
+ * After return, the iterator is positioned such that:
+ *   - Forward (reverse=0): fbtreeNext() returns the first in-range element
+ *   - Reverse (reverse=1): fbtreePrev() returns the last in-range element
+ *
+ * 'packed' is the [score][element] boundary value to seek to.
+ * 'inclusive' means the boundary element itself is in-range. */
+static void seekForBound(fbtreeIterator *fbt_iter, sds packed, int reverse, int inclusive) {
+    fbtreeSeekToValue(packed, fbt_iter);
+
+    if (!reverse && !inclusive) {
+        /* Forward + exclusive: if positioned at exact match, advance past it. */
+        const_sds pos;
+        if (fbtreeNext(fbt_iter, &pos)) {
+            if (sdscmp(pos, packed) != 0) {
+                /* First element > bound — re-seek so next() returns it. */
+                fbtreeSeekToValue(pos, fbt_iter);
+            }
+            /* Else: was exact match, consumed it. next() returns next element. */
+        }
+    } else if (reverse && inclusive) {
+        /* Reverse + inclusive: seek is at first >= bound.
+         * If bound exists, advance past so prev() returns bound.
+         * If not, re-seek to first > bound so prev() returns last < bound. */
+        const_sds pos;
+        if (fbtreeNext(fbt_iter, &pos)) {
+            if (sdscmp(pos, packed) != 0) {
+                /* Not exact match — re-seek so prev() returns last < bound */
+                fbtreeSeekToValue(pos, fbt_iter);
+            }
+            /* Else: exact match consumed, prev() now returns bound. */
+        }
+    }
+    /* Forward + inclusive: seek already at first >= bound. next() returns it. ✓ */
+    /* Reverse + exclusive: seek at first >= bound. prev() returns last < bound. ✓ */
+}
+
+/* Skip N elements in the given direction. */
+static void skipElements(fbtreeIterator *fbt_iter, long count, int reverse) {
+    const_sds pos;
+    for (long i = 0; i < count; i++) {
+        if (reverse) {
+            if (!fbtreePrev(fbt_iter, &pos)) return;
+        } else {
+            if (!fbtreeNext(fbt_iter, &pos)) return;
+        }
+    }
+}
+
+/* Pack a lex element with a score prefix into a temporary sds for seeking. */
+static sds packLexBound(uint64_t score_prefix, const_sds element) {
+    sds packed = sdsempty();
+    packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(element));
+    memcpy(packed, &score_prefix, SCORE_SIZE);
+    memcpy(packed + SCORE_SIZE, element, sdslen(element));
+    sdsIncrLen(packed, SCORE_SIZE + sdslen(element));
+    return packed;
+}
+
 unsigned long fbtreeOICountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
-    /* Lex range: all items have same score, sorted by element. */
     fbtreeIndex *fbt = (fbtreeIndex *)oi;
     unsigned long len = fbtreeLength(fbt);
     if (len == 0) return 0;
@@ -285,35 +344,25 @@ unsigned long fbtreeOICountLexRange(OrderedIndex *oi, const_sds min, const_sds m
     fbtreeIterator iter;
     fbtreeInitIterator(&iter, fbt);
 
-    /* Seek to start position */
+    /* Seek to min bound */
     if (min == shared.minstring) {
         fbtreeSeekToRank(&iter, 0);
     } else {
-        sds min_packed = sdsempty();
-        min_packed = sdsMakeRoomFor(min_packed, SCORE_SIZE + sdslen(min));
-        memcpy(min_packed, &score_prefix, SCORE_SIZE);
-        memcpy(min_packed + SCORE_SIZE, min, sdslen(min));
-        sdsIncrLen(min_packed, SCORE_SIZE + sdslen(min));
-        fbtreeSeekToValue(min_packed, &iter);
-        sdsfree(min_packed);
+        sds packed = packLexBound(score_prefix, min);
+        seekForBound(&iter, packed, 0, !min_ex);
+        sdsfree(packed);
     }
 
     unsigned long count = 0;
     const_sds pos;
     while (fbtreeNext(&iter, &pos)) {
-        const char *ele = pos + SCORE_SIZE;
-        size_t ele_len = sdslen(pos) - SCORE_SIZE;
-        /* Check max bound (skip if max is +inf sentinel) */
+        /* Check max bound */
         if (max != shared.maxstring) {
+            size_t ele_len;
+            const char *ele = unpackElement(pos, &ele_len);
             int cmp = memcmp(ele, max, ele_len < sdslen(max) ? ele_len : sdslen(max));
             if (cmp == 0) cmp = (int)ele_len - (int)sdslen(max);
             if (max_ex ? cmp >= 0 : cmp > 0) break;
-        }
-        /* Check min exclusive */
-        if (min_ex && min != shared.minstring && count == 0) {
-            int cmp_min = memcmp(ele, min, ele_len < sdslen(min) ? ele_len : sdslen(min));
-            if (cmp_min == 0) cmp_min = (int)ele_len - (int)sdslen(min);
-            if (cmp_min == 0) continue;
         }
         count++;
     }
@@ -401,6 +450,14 @@ void fbtreeOISeekToScoreRange(OrderedIndexIterator *iter, double min, double max
     fbtreeSeekToRank(fbt_iter, (unsigned long)target + (offset < 0 ? 1 : 0));
 }
 
+/* Unified seek helper: position iterator at a range boundary.
+ *
+ * After return, the iterator is positioned such that:
+ *   - Forward (reverse=0): fbtreeNext() returns the first in-range element
+ *   - Reverse (reverse=1): fbtreePrev() returns the last in-range element
+ *
+ * 'packed' is the [score][element] boundary value to seek to.
+ * 'inclusive' means the boundary element itself is in-range. */
 void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
     fbtreeIterator *fbt_iter = (fbtreeIterator *)iter;
     fbtreeIndex *fbt = fbtreeIteratorGetIndex(fbt_iter);
@@ -413,82 +470,28 @@ void fbtreeOISeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds
     memcpy(&score_prefix, first, SCORE_SIZE);
 
     unsigned long len = fbtreeLength(fbt);
+    int reverse = (offset < 0);
 
-    if (offset >= 0) {
-        /* Forward seek: position so that next() returns first element in range */
+    if (!reverse) {
+        /* Forward: seek to min bound */
         if (min == shared.minstring) {
             fbtreeSeekToRank(fbt_iter, 0);
         } else {
-            sds packed = sdsempty();
-            packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(min));
-            memcpy(packed, &score_prefix, SCORE_SIZE);
-            memcpy(packed + SCORE_SIZE, min, sdslen(min));
-            sdsIncrLen(packed, SCORE_SIZE + sdslen(min));
-
-            fbtreeSeekToValue(packed, fbt_iter);
+            sds packed = packLexBound(score_prefix, min);
+            seekForBound(fbt_iter, packed, 0, !min_ex);
             sdsfree(packed);
-
-            /* For exclusive min: if positioned at exact match, advance past it. */
-            if (min_ex) {
-                const_sds pos;
-                if (fbtreeNext(fbt_iter, &pos)) {
-                    const char *ele = pos + SCORE_SIZE;
-                    size_t ele_len = sdslen(pos) - SCORE_SIZE;
-                    if (ele_len != sdslen(min) || memcmp(ele, min, ele_len) != 0) {
-                        /* Not an exact match — re-seek to include this element */
-                        fbtreeSeekToValue(pos, fbt_iter);
-                    }
-                }
-            }
         }
-        /* Apply LIMIT offset: skip 'offset' elements */
-        if (offset > 0) {
-            const_sds pos;
-            for (long i = 0; i < offset; i++) {
-                if (!fbtreeNext(fbt_iter, &pos)) return;
-            }
-        }
+        skipElements(fbt_iter, offset, 0);
     } else {
-        /* Reverse seek: position so that prev() returns last element in range */
+        /* Reverse: seek to max bound */
         if (max == shared.maxstring) {
             fbtreeSeekToRank(fbt_iter, len);
         } else {
-            sds packed = sdsempty();
-            packed = sdsMakeRoomFor(packed, SCORE_SIZE + sdslen(max));
-            memcpy(packed, &score_prefix, SCORE_SIZE);
-            memcpy(packed + SCORE_SIZE, max, sdslen(max));
-            sdsIncrLen(packed, SCORE_SIZE + sdslen(max));
-
-            fbtreeSeekToValue(packed, fbt_iter);
+            sds packed = packLexBound(score_prefix, max);
+            seekForBound(fbt_iter, packed, 1, !max_ex);
             sdsfree(packed);
-
-            if (!max_ex) {
-                /* Inclusive max: seek positioned at first >= max.
-                 * If max exists, advance past it so prev() returns max.
-                 * If max doesn't exist, re-seek to first > max so prev()
-                 * returns last element < max. */
-                const_sds pos;
-                if (fbtreeNext(fbt_iter, &pos)) {
-                    const char *ele = pos + SCORE_SIZE;
-                    size_t ele_len = sdslen(pos) - SCORE_SIZE;
-                    if (ele_len != sdslen(max) || memcmp(ele, max, ele_len) != 0) {
-                        /* Not exact match — re-seek so prev() returns last < max */
-                        fbtreeSeekToValue(pos, fbt_iter);
-                    }
-                    /* Else: exact match consumed, prev() now returns max. */
-                }
-            }
-            /* Exclusive max: seek to exact value, prev() returns element before it. */
         }
-        /* Apply LIMIT offset for reverse: offset is -(skip+1),
-         * so -1 = no skip, -2 = skip 1, etc. */
-        long skip = -(offset + 1);
-        if (skip > 0) {
-            const_sds pos;
-            for (long i = 0; i < skip; i++) {
-                if (!fbtreePrev(fbt_iter, &pos)) return;
-            }
-        }
+        skipElements(fbt_iter, -(offset + 1), 1);
     }
 }
 
