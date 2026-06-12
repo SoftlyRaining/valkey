@@ -628,29 +628,14 @@ hashtableType setHashtableType = {
 
 /* Extract the element portion of a zset hashtable key as (ptr, len).
  * Handles both stored OrderedIndex items and plain sds lookup keys.
- * Currently both are plain sds; the fbtree backend (next PR) extends this
- * to skip an 8-byte score prefix on packed items using the sds aux bit. */
+ * The fbtree backend extends this to skip an 8-byte score prefix on
+ * packed items using the sds aux bit. */
+#ifdef ORDERED_INDEX_SKIPLIST
 static const char *zsetExtractElement(const void *key, size_t *len) {
     *len = sdslen((const_sds)key);
     return (const char *)key;
 }
-
-const void *zsetHashtableGetKey(const void *element) {
-#ifdef ORDERED_INDEX_SKIPLIST
-    const char *ptr;
-    size_t len;
-    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
-    return ptr;
 #else
-    return element; /* Fbtree: the packed sds IS the key (aux-bit hash/compare handles it) */
-#endif
-}
-
-#ifndef ORDERED_INDEX_SKIPLIST
-/* Hash/compare for zset hashtable entries. Fbtree items are packed sds with
- * [8-byte score][element] marked via aux bit 0. Plain sds keys (used for
- * lookups) have no aux bit set. Both cases must produce the same hash for
- * the same element bytes. */
 static const char *zsetExtractElement(const void *key, size_t *len) {
     const_sds s = (const_sds)key;
     if (sdsGetAuxBit(s, 0)) {
@@ -661,19 +646,17 @@ static const char *zsetExtractElement(const void *key, size_t *len) {
     *len = sdslen(s);
     return s;
 }
+#endif
 
-static uint64_t zsetHashFunction(const void *key) {
+const void *zsetHashtableGetKey(const void *element) {
+#ifdef ORDERED_INDEX_SKIPLIST
+    const char *ptr;
     size_t len;
-    const char *ptr = zsetExtractElement(key, &len);
-    return genHashFunctionConfigurableSeed(ptr, len);
-}
-
-static int zsetKeyCompare(const void *key1, const void *key2) {
-    size_t len1, len2;
-    const char *ptr1 = zsetExtractElement(key1, &len1);
-    const char *ptr2 = zsetExtractElement(key2, &len2);
-    if (len1 != len2) return 0;
-    return memcmp(ptr1, ptr2, len1) == 0;
+    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
+    return ptr;
+#else
+    return element; /* Fbtree: the packed sds IS the key (aux-bit hash/compare handles it) */
+#endif
 }
 
 static uint64_t zsetHashFunction(const void *key) {
@@ -696,14 +679,6 @@ hashtableType zsetHashtableType = {
     .entryGetKey = zsetHashtableGetKey,
     .keyCompare = zsetKeyCompare,
 };
-#else
-/* Sorted sets hash (an ordered index is used in addition to the hash table) */
-hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
-};
-#endif
 
 uint64_t hashtableSdsHash(const void *key) {
     return hashtableGenHashFunction((const char *)key, sdslen((char *)key));

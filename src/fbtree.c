@@ -2225,9 +2225,7 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
 
 /* ========== Defrag / Dismiss ========== */
 
-unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor,
-                               void (*item_callback)(sds old_item, sds new_item, void *ctx),
-                               void *ctx, void *(*defragfn)(void *)) {
+unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
     if (!fbt || !fbt->leftmost_leaf) return 0;
 
     /* cursor encodes (leaf_index << 8 | item_index). 0 = start. */
@@ -2245,8 +2243,12 @@ unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor,
     while (leaf && count < 16) {
         while (item_idx < leaf->header.num_items && count < 16) {
             sds old_item = leaf->values[item_idx];
-            sds new_item = defragfn(old_item);
-            if (new_item) {
+            /* Items are sds strings — defrag the underlying allocation
+             * and adjust for the sds header offset. */
+            void *ptr = sdsAllocPtr(old_item);
+            void *newptr = defragfn(ptr);
+            if (newptr) {
+                sds new_item = (char *)newptr + (old_item - (char *)ptr);
                 leaf->values[item_idx] = new_item;
                 item_callback(old_item, new_item, ctx);
             }

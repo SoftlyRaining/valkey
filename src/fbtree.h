@@ -70,9 +70,7 @@ typedef struct leafNode *(*fbtreeLeafDefragFn)(struct leafNode *leaf, void *ctx)
 /* Incremental defrag scan. cursor=0 to start, returns 0 when done.
  * Processes up to 16 items per call. When an item is reallocated,
  * item_callback is called with old/new pointers. */
-unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor,
-                               void (*item_callback)(sds old_item, sds new_item, void *ctx),
-                               void *ctx, void *(*defragfn)(void *));
+unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *));
 
 /* Walk all leaf nodes and call dismissMemory on each. */
 void fbtreeDismissMemory(fbtreeIndex *fbt);
