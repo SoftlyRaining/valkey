@@ -2226,44 +2226,49 @@ bool fbtreeDebugValidate(fbtreeIndex *fbt, bool verbose) {
 /* ========== Defrag / Dismiss ========== */
 
 unsigned long fbtreeDefragScan(fbtreeIndex *fbt, unsigned long cursor, void (*item_callback)(sds old_item, sds new_item, void *ctx), void *ctx, void *(*defragfn)(void *)) {
-    if (!fbt || !fbt->leftmost_leaf) return 0;
+    if (!fbt || !fbt->root || fbtreeLength(fbt) == 0) return 0;
+    if (cursor >= fbtreeLength(fbt)) return 0;
 
-    /* cursor encodes (leaf_index << 8 | item_index). 0 = start. */
-    unsigned long leaf_idx = cursor >> 8;
-    unsigned int item_idx = cursor & 0xFF;
+    /* Navigate to the leaf containing rank 'cursor' using child_sizes. O(log N). */
+    node *current = fbt->root;
+    unsigned long remaining = cursor;
 
-    /* Walk to the target leaf */
-    leafNode *leaf = fbt->leftmost_leaf;
-    for (unsigned long i = 0; i < leaf_idx && leaf; i++) {
-        leaf = leaf->next;
+    while (!current->is_leaf) {
+        innerNode *inner = (innerNode *)current;
+        int i = 0;
+        while (i < inner->header.num_items && remaining >= inner->child_sizes[i]) {
+            remaining -= inner->child_sizes[i];
+            i++;
+        }
+        if (i >= inner->header.num_items) return 0;
+        current = inner->children[i];
     }
-    if (!leaf) return 0;
 
-    unsigned long count = 0;
-    while (leaf && count < 16) {
-        while (item_idx < leaf->header.num_items && count < 16) {
-            sds old_item = leaf->values[item_idx];
-            /* Items are sds strings — defrag the underlying allocation
-             * and adjust for the sds header offset. */
+    leafNode *leaf = (leafNode *)current;
+
+    /* Process up to 4 leaves per call, starting from 'remaining' offset in the first. */
+    unsigned long processed = 0;
+    int leaves_to_process = 4;
+    int start = (int)remaining;
+
+    while (leaf && leaves_to_process-- > 0) {
+        for (int i = start; i < leaf->header.num_items; i++) {
+            sds old_item = leaf->values[i];
             void *ptr = sdsAllocPtr(old_item);
             void *newptr = defragfn(ptr);
             if (newptr) {
                 sds new_item = (char *)newptr + (old_item - (char *)ptr);
-                leaf->values[item_idx] = new_item;
+                leaf->values[i] = new_item;
                 item_callback(old_item, new_item, ctx);
             }
-            item_idx++;
-            count++;
+            processed++;
         }
-        if (item_idx >= leaf->header.num_items) {
-            leaf = leaf->next;
-            leaf_idx++;
-            item_idx = 0;
-        }
+        leaf = leaf->next;
+        start = 0;
     }
 
-    if (!leaf) return 0; /* done */
-    return (leaf_idx << 8) | item_idx;
+    unsigned long next_rank = cursor + processed;
+    return (next_rank >= fbtreeLength(fbt)) ? 0 : next_rank;
 }
 
 void fbtreeDismissMemory(fbtreeIndex *fbt) {
