@@ -22,13 +22,6 @@ static_assert(sizeof(OrderedIndexIterator) >= sizeof(fbtreeIterator),
 
 #define SCORE_SIZE 8 /* Normalized score prefix size */
 
-/* Mark/check packed sds as fbtree items using aux bit 0.
- * The hashtable uses this to hash/compare only the element portion. */
-static inline void sdsSetFbtreeItem(sds s) {
-    unsigned char flags = s[-1];
-    s[-1] = (char)(flags | (1 << SDS_TYPE_BITS));
-}
-
 /* ========== Score Normalization ==========
  * Converts IEEE 754 double to a sortable 8-byte big-endian representation.
  * Lexicographic byte comparison matches numeric order after transformation. */
@@ -56,23 +49,13 @@ static inline double sortableToScore(uint64_t be) {
     return score;
 }
 
-/* Pack score and element into sds: [8-byte sortable score][element]
- * The result is marked as an fbtree item via aux bit 0.
- * Since total length is always >= 8 (score prefix), and sdshdr5 max is 31,
- * most items will be sdshdr8+. For very short elements (total < 32), sdsnewlen
- * may pick sdshdr5. We handle this by using sdsMakeRoomForNonGreedy after
- * creating an empty sds (which is always sdshdr8). */
+/* Pack score and element into sds: [8-byte sortable score][element] */
 static sds packScoreElement(double score, const char *ele, size_t ele_len) {
     uint64_t sortable = scoreToSortable(score);
     size_t total = SCORE_SIZE + ele_len;
-    /* Create empty sds (guaranteed sdshdr8), then ensure capacity */
-    sds packed = sdsempty();
-    packed = sdsMakeRoomFor(packed, total);
+    sds packed = sdsnewlen(NULL, total);
     memcpy(packed, &sortable, SCORE_SIZE);
     memcpy(packed + SCORE_SIZE, ele, ele_len);
-    sdsIncrLen(packed, total);
-    packed[total] = '\0';
-    sdsSetFbtreeItem(packed);
     return packed;
 }
 

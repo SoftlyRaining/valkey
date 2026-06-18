@@ -767,7 +767,10 @@ int zsetScore(robj *zobj, sds member, double *score) {
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
         void *entry;
-        if (!hashtableFind(zs->ht, member, &entry)) return C_ERR;
+        zsetMarkLookupKey(member);
+        int found = hashtableFind(zs->ht, member, &entry);
+        zsetUnmarkLookupKey(member);
+        if (!found) return C_ERR;
         OrderedIndexItem *setElement = entry;
         *score = orderedIndexGetScore(setElement);
     } else {
@@ -895,7 +898,9 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = objectGetVal(zobj);
 
+        zsetMarkLookupKey(ele);
         void **node_ref_in_hashtable = hashtableFindRef(zs->ht, ele);
+        zsetUnmarkLookupKey(ele);
         if (node_ref_in_hashtable != NULL) {
             /* NX? Return, same element already exists. */
             if (nx) {
@@ -1030,7 +1035,10 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
         zset *zs = objectGetVal(zobj);
 
         void *entry;
-        if (!hashtableFind(zs->ht, ele, &entry)) return -1;
+        zsetMarkLookupKey(ele);
+        int found = hashtableFind(zs->ht, ele, &entry);
+        zsetUnmarkLookupKey(ele);
+        if (!found) return -1;
         OrderedIndexItem *node = entry;
 
         rank = orderedIndexGetIndex(zs->oi, node);
@@ -1716,7 +1724,10 @@ static int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
         } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = objectGetVal(op->subject);
             void *entry;
-            if (hashtableFind(zs->ht, val->ele, &entry)) {
+            zsetMarkLookupKey(val->ele);
+            int found = hashtableFind(zs->ht, val->ele, &entry);
+            zsetUnmarkLookupKey(val->ele);
+            if (found) {
                 OrderedIndexItem *node = entry;
                 *score = orderedIndexGetScore(node);
                 return 1;
@@ -2159,7 +2170,10 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 hashtablePosition position;
                 /* If we don't have it, we need to create a new entry. */
                 void *existing;
-                if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
+                zsetMarkLookupKey(sdsval);
+                int is_new = hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing);
+                zsetUnmarkLookupKey(sdsval);
+                if (is_new) {
                     sds tmp_ele = zuiNewSdsFromValue(&zval);
                     OrderedIndexItem *new_node = orderedIndexCreateDetached(score, tmp_ele, sdslen(tmp_ele));
                     sdsfree(tmp_ele);
