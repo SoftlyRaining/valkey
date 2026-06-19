@@ -1332,14 +1332,7 @@ typedef enum {
  * The ordered index frees the item after this callback returns. */
 static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     hashtable *ht = ctx;
-#ifndef ORDERED_INDEX_FBTREE
-    const char *ptr;
-    size_t len;
-    orderedIndexGetElementRaw(item, &ptr, &len);
-    hashtableDelete(ht, (sds)ptr);
-#else
     hashtableDelete(ht, item);
-#endif
 }
 
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
@@ -3627,14 +3620,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-#ifndef ORDERED_INDEX_FBTREE
-            const char *key_ptr;
-            size_t key_len;
-            orderedIndexGetElementRaw(element, &key_ptr, &key_len);
-            hashtableDelete(ht, (sds)key_ptr);
-#else
             hashtableDelete(ht, element);
-#endif
             size--;
         }
         hashtableCleanupIterator(&iter);

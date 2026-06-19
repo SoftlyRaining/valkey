@@ -2799,7 +2799,6 @@ extern hashtableType zsetHashtableType;
 /* Zset heterogeneous hashtable lookup: mark/unmark plain sds keys before
  * passing them to hashtable operations so zsetExtractElement can distinguish
  * them from stored packed fbtree items. No-op for skiplist backend. */
-#ifdef ORDERED_INDEX_FBTREE
 #define ZSET_LOOKUP_TYPE5_MARKER 6
 static inline void zsetMarkLookupKey(sds s) {
     if (sdsType(s) == SDS_TYPE_5) {
@@ -2816,14 +2815,6 @@ static inline void zsetUnmarkLookupKey(sds s) {
         sdsSetAuxBit(s, 0, 0);
     }
 }
-#else
-static inline void zsetMarkLookupKey(sds s) {
-    (void)s;
-}
-static inline void zsetUnmarkLookupKey(sds s) {
-    (void)s;
-}
-#endif
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;

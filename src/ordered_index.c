@@ -4,19 +4,14 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-/* OrderedIndex implementation — delegates to the active backend.
- * Default: fbtree. Build with ORDERED_INDEX_SKIPLIST=yes to use skiplist. */
+/* OrderedIndex implementation — delegates to the fbtree backend. */
 
 // clang-format off
 #include "ordered_index.h"
 
-#ifdef ORDERED_INDEX_FBTREE
 #include "fbtree_ordered_index.h"
 #define BACKEND(fn) fbtreeOI##fn
-#else
-#include "skiplist_ordered_index.h"
-#define BACKEND(fn) skiplist##fn
-#endif
+// clang-format on
 
 /* Lifecycle */
 
