@@ -957,7 +957,10 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
  * element was not there). */
 static int zsetRemoveFromIndex(zset *zs, sds ele) {
     void *entry;
-    if (!hashtablePop(zs->ht, ele, &entry)) return 0;
+    zsetMarkLookupKey(ele);
+    int found = hashtablePop(zs->ht, ele, &entry);
+    zsetUnmarkLookupKey(ele);
+    if (!found) return 0;
     OrderedIndexItem *node = entry;
 
     /* hashtable only contains pointers to ordered index items. Nothing to free. */
