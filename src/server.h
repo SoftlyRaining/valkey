@@ -2817,8 +2817,12 @@ static inline void zsetUnmarkLookupKey(sds s) {
     }
 }
 #else
-static inline void zsetMarkLookupKey(sds s) { (void)s; }
-static inline void zsetUnmarkLookupKey(sds s) { (void)s; }
+static inline void zsetMarkLookupKey(sds s) {
+    (void)s;
+}
+static inline void zsetUnmarkLookupKey(sds s) {
+    (void)s;
+}
 #endif
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
