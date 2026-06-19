@@ -5,17 +5,17 @@
  */
 
 /* OrderedIndex implementation — delegates to the active backend.
- * Default: fbtree. Build with ORDERED_INDEX_SKIPLIST=yes to use skiplist. */
+ * Default: skiplist. Build with ORDERED_INDEX_FBTREE=yes to use fbtree. */
 
 // clang-format off
 #include "ordered_index.h"
 
-#ifdef ORDERED_INDEX_SKIPLIST
-#include "skiplist_ordered_index.h"
-#define BACKEND(fn) skiplist##fn
-#else
+#ifdef ORDERED_INDEX_FBTREE
 #include "fbtree_ordered_index.h"
 #define BACKEND(fn) fbtreeOI##fn
+#else
+#include "skiplist_ordered_index.h"
+#define BACKEND(fn) skiplist##fn
 #endif
 
 /* Lifecycle */

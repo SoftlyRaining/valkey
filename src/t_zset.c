@@ -1329,7 +1329,7 @@ typedef enum {
  * The ordered index frees the item after this callback returns. */
 static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     hashtable *ht = ctx;
-#ifdef ORDERED_INDEX_SKIPLIST
+#ifndef ORDERED_INDEX_FBTREE
     const char *ptr;
     size_t len;
     orderedIndexGetElementRaw(item, &ptr, &len);
@@ -3624,7 +3624,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-#ifdef ORDERED_INDEX_SKIPLIST
+#ifndef ORDERED_INDEX_FBTREE
             const char *key_ptr;
             size_t key_len;
             orderedIndexGetElementRaw(element, &key_ptr, &key_len);

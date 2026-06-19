@@ -136,10 +136,10 @@ ifeq ($(DEBUG_FORCE_DEFRAG), yes)
 	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
 endif
 
-# Ordered index backend selection. Default is fbtree.
-# Build with ORDERED_INDEX_SKIPLIST=yes to use skiplist instead.
-ifeq ($(ORDERED_INDEX_SKIPLIST), yes)
-	SERVER_CFLAGS +=-DORDERED_INDEX_SKIPLIST
+# Ordered index backend selection. Default is skiplist.
+# Build with ORDERED_INDEX_FBTREE=yes to use fbtree instead of skiplist.
+ifeq ($(ORDERED_INDEX_FBTREE), yes)
+	SERVER_CFLAGS +=-DORDERED_INDEX_FBTREE
 endif
 
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)

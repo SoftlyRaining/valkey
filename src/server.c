@@ -632,7 +632,7 @@ hashtableType setHashtableType = {
  * The fbtree backend stores packed sds items ([8B score][element]) and uses
  * lookup-key marking for heterogeneous hashtable lookups. */
 
-#ifdef ORDERED_INDEX_SKIPLIST
+#ifndef ORDERED_INDEX_FBTREE
 
 static const void *zsetHashtableGetKey(const void *element) {
     const char *ptr;
@@ -692,7 +692,7 @@ hashtableType zsetHashtableType = {
     .keyCompare = zsetKeyCompare,
 };
 
-#endif /* ORDERED_INDEX_SKIPLIST */
+#endif /* ORDERED_INDEX_FBTREE */
 
 uint64_t hashtableSdsHash(const void *key) {
     return hashtableGenHashFunction((const char *)key, sdslen((char *)key));
