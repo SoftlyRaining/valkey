@@ -626,20 +626,51 @@ hashtableType setHashtableType = {
     .keyCompare = dictSdsKeyCompare,
     .entryDestructor = dictSdsDestructor};
 
-/* Extract the element portion of a zset hashtable key as (ptr, len).
- * Handles both stored OrderedIndex items and plain sds lookup keys.
- * Currently both are plain sds; the fbtree backend (next PR) extends this
- * to skip an 8-byte score prefix on packed items using the sds aux bit. */
-static const char *zsetExtractElement(const void *key, size_t *len) {
-    *len = sdslen((const_sds)key);
-    return (const char *)key;
-}
+/* ========== Zset Hashtable Type ==========
+ * Separate implementations for skiplist and fbtree backends.
+ * The skiplist backend stores plain sds elements in the hashtable.
+ * The fbtree backend stores packed sds items ([8B score][element]) and uses
+ * lookup-key marking for heterogeneous hashtable lookups. */
 
-const void *zsetHashtableGetKey(const void *element) {
+#ifndef ORDERED_INDEX_FBTREE
+
+static const void *zsetHashtableGetKey(const void *element) {
     const char *ptr;
     size_t len;
     orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
     return ptr;
+}
+
+hashtableType zsetHashtableType = {
+    .hashFunction = sdsHashConfigurableSeed,
+    .entryGetKey = zsetHashtableGetKey,
+    .keyCompare = dictSdsKeyCompare,
+};
+
+#else /* fbtree backend */
+
+static inline int zsetIsLookupKey(const_sds s) {
+    unsigned char type = s[-1] & SDS_TYPE_MASK;
+    if (type == ZSET_LOOKUP_TYPE5_MARKER) return 1;
+    if (type != SDS_TYPE_5 && sdsGetAuxBit(s, 0)) return 1;
+    return 0;
+}
+
+/* Extract element from either a stored packed item or a marked lookup key. */
+static const char *zsetExtractElement(const void *key, size_t *len) {
+    const_sds s = (const_sds)key;
+    if (zsetIsLookupKey(s)) {
+        unsigned char type = s[-1] & SDS_TYPE_MASK;
+        if (type == ZSET_LOOKUP_TYPE5_MARKER) {
+            *len = SDS_TYPE_5_LEN(s[-1]);
+        } else {
+            *len = sdslen(s);
+        }
+        return s;
+    }
+    /* Stored packed fbtree item: [8B score][element] */
+    *len = sdslen(s) - 8;
+    return s + 8;
 }
 
 static uint64_t zsetHashFunction(const void *key) {
@@ -656,12 +687,12 @@ static int zsetKeyCompare(const void *a, const void *b) {
     return memcmp(aptr, bptr, alen) == 0;
 }
 
-/* Sorted sets hash (an ordered index is used in addition to the hash table) */
 hashtableType zsetHashtableType = {
     .hashFunction = zsetHashFunction,
-    .entryGetKey = zsetHashtableGetKey,
     .keyCompare = zsetKeyCompare,
 };
+
+#endif /* ORDERED_INDEX_FBTREE */
 
 uint64_t hashtableSdsHash(const void *key) {
     return hashtableGenHashFunction((const char *)key, sdslen((char *)key));

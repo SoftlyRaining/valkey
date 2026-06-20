@@ -1642,7 +1642,7 @@ TEST_P(OrderedIndexTest, CountLexRangeEmpty) {
 
 INSTANTIATE_TEST_SUITE_P(AllImplementations,
                          OrderedIndexTest,
-                         ::testing::Values(&skiplistImpl),
+                         ::testing::Values(&skiplistImpl, &fbtreeImpl),
                          orderedIndexTestName);
 
 /* ========== On-Delete Callback Tests ========== */
@@ -2300,10 +2300,10 @@ TEST_P(RangeDeleteHashtableConsistencyTest, ByLex_EmptyRange) {
 
 INSTANTIATE_TEST_SUITE_P(AllImplementations,
                          OnDeleteCallbackTest,
-                         ::testing::Values(&skiplistImpl),
+                         ::testing::Values(&skiplistImpl, &fbtreeImpl),
                          orderedIndexTestName);
 
 INSTANTIATE_TEST_SUITE_P(AllImplementations,
                          RangeDeleteHashtableConsistencyTest,
-                         ::testing::Values(&skiplistImpl),
+                         ::testing::Values(&skiplistImpl, &fbtreeImpl),
                          orderedIndexTestName);

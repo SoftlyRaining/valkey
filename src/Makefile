@@ -136,6 +136,13 @@ ifeq ($(DEBUG_FORCE_DEFRAG), yes)
 	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
 endif
 
+# Ordered index backend selection. Default is skiplist.
+# Ordered index backend selection. Default is skiplist.
+# Build with ORDERED_INDEX_FBTREE=yes to use fbtree instead of skiplist.
+ifeq ($(ORDERED_INDEX_FBTREE), yes)
+	CFLAGS +=-DORDERED_INDEX_FBTREE
+endif
+
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
@@ -556,6 +563,8 @@ ENGINE_SERVER_OBJ = \
     sha256.o \
     siphash.o \
     skiplist_ordered_index.o \
+    fbtree.o \
+    fbtree_ordered_index.o \
     ordered_index.o \
     socket.o \
     sort.o \
