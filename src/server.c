@@ -627,27 +627,8 @@ hashtableType setHashtableType = {
     .entryDestructor = dictSdsDestructor};
 
 /* ========== Zset Hashtable Type ==========
- * Separate implementations for skiplist and fbtree backends.
- * The skiplist backend stores plain sds elements in the hashtable.
  * The fbtree backend stores packed sds items ([8B score][element]) and uses
  * lookup-key marking for heterogeneous hashtable lookups. */
-
-#ifndef ORDERED_INDEX_FBTREE
-
-static const void *zsetHashtableGetKey(const void *element) {
-    const char *ptr;
-    size_t len;
-    orderedIndexGetElementRaw((const OrderedIndexItem *)element, &ptr, &len);
-    return ptr;
-}
-
-hashtableType zsetHashtableType = {
-    .hashFunction = sdsHashConfigurableSeed,
-    .entryGetKey = zsetHashtableGetKey,
-    .keyCompare = dictSdsKeyCompare,
-};
-
-#else /* fbtree backend */
 
 static inline int zsetIsLookupKey(const_sds s) {
     unsigned char type = s[-1] & SDS_TYPE_MASK;
@@ -692,7 +673,6 @@ hashtableType zsetHashtableType = {
     .keyCompare = zsetKeyCompare,
 };
 
-#endif /* ORDERED_INDEX_FBTREE */
 
 uint64_t hashtableSdsHash(const void *key) {
     return hashtableGenHashFunction((const char *)key, sdslen((char *)key));

@@ -95,7 +95,7 @@ int zsetLexLteMax(const char *value, size_t len, zlexrangespec *spec) {
 
 void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
 
-static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
+static int zsetParseRange(robj *min, robj *max, zrangespec *spec) {
     char *eptr;
     spec->minex = spec->maxex = 0;
 
@@ -134,7 +134,7 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
 
     return C_OK;
 }
-static int zslParseLexRangeItem(robj *item, sds *dest, int *ex) {
+static int zsetParseLexRangeItem(robj *item, sds *dest, int *ex) {
     char *c = objectGetVal(item);
 
     switch (c[0]) {
@@ -177,8 +177,8 @@ int zsetParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     if (min->encoding == OBJ_ENCODING_INT || max->encoding == OBJ_ENCODING_INT) return C_ERR;
 
     spec->min = spec->max = NULL;
-    if (zslParseLexRangeItem(min, &spec->min, &spec->minex) == C_ERR ||
-        zslParseLexRangeItem(max, &spec->max, &spec->maxex) == C_ERR) {
+    if (zsetParseLexRangeItem(min, &spec->min, &spec->minex) == C_ERR ||
+        zsetParseLexRangeItem(max, &spec->max, &spec->maxex) == C_ERR) {
         zsetFreeLexRange(spec);
         return C_ERR;
     } else {
@@ -621,7 +621,7 @@ unsigned long zsetLength(const robj *zobj) {
     unsigned long length = 0;
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         length = zzlLength(objectGetVal(zobj));
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         length = orderedIndexLength(((const zset *)objectGetVal(zobj))->oi);
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -653,7 +653,7 @@ robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
 void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
     if (zobj->encoding == OBJ_ENCODING_LISTPACK &&
         (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value)) {
-        zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, size_hint);
+        zsetConvertAndExpand(zobj, OBJ_ENCODING_BTREE, size_hint);
     }
 }
 
@@ -678,7 +678,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
         unsigned int vlen;
         long long vlong;
 
-        if (encoding != OBJ_ENCODING_SKIPLIST) serverPanic("Unknown target encoding");
+        if (encoding != OBJ_ENCODING_BTREE) serverPanic("Unknown target encoding");
 
         zs = zmalloc(sizeof(*zs));
         zs->ht = hashtableCreate(&zsetHashtableType);
@@ -714,8 +714,8 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
 
         zfree(objectGetVal(zobj));
         objectSetVal(zobj, zs);
-        zobj->encoding = OBJ_ENCODING_SKIPLIST;
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        zobj->encoding = OBJ_ENCODING_BTREE;
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         unsigned char *zl = lpNew(0);
 
         if (encoding != OBJ_ENCODING_LISTPACK) serverPanic("Unknown target encoding");
@@ -764,7 +764,7 @@ int zsetScore(robj *zobj, sds member, double *score) {
 
     if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
         if (zzlFind(objectGetVal(zobj), member, score) == NULL) return C_ERR;
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         void *entry;
         zsetMarkLookupKey(member);
@@ -880,7 +880,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
              * becomes too long *before* executing zzlInsert. */
             if (zzlLength(objectGetVal(zobj)) + 1 > server.zset_max_listpack_entries ||
                 sdslen(ele) > server.zset_max_listpack_value || !lpSafeToAdd(objectGetVal(zobj), sdslen(ele))) {
-                zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, zsetLength(zobj) + 1);
+                zsetConvertAndExpand(zobj, OBJ_ENCODING_BTREE, zsetLength(zobj) + 1);
             } else {
                 objectSetVal(zobj, zzlInsert(objectGetVal(zobj), ele, score));
                 if (newscore) *newscore = score;
@@ -895,7 +895,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
 
     /* Note that the above block handling listpack would have either returned or
      * converted the key to ordered index encoding. */
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
 
         zsetMarkLookupKey(ele);
@@ -981,7 +981,7 @@ int zsetDel(robj *zobj, sds ele) {
             objectSetVal(zobj, zzlDelete(objectGetVal(zobj), eptr));
             return 1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         if (zsetRemoveFromIndex(zs, ele)) {
             return 1;
@@ -1034,7 +1034,7 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
         } else {
             return -1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
 
         void *entry;
@@ -1075,7 +1075,7 @@ robj *zsetDup(robj *o) {
         memcpy(new_zl, zl, sz);
         zobj = createObject(OBJ_ZSET, new_zl);
         zobj->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (o->encoding == OBJ_ENCODING_BTREE) {
         zobj = createZsetObject();
         zs = objectGetVal(o);
         new_zs = objectGetVal(zobj);
@@ -1120,7 +1120,7 @@ void zsetReplyFromListpackEntry(client *c, listpackEntry *e) {
  * The memory in `key` is not to be freed or modified by the caller.
  * 'score' can be NULL in which case it's not extracted. */
 static void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, listpackEntry *key, double *score) {
-    if (zsetobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    if (zsetobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zsetobj);
         void *entry;
         hashtableFairRandomEntry(zs->ht, &entry);
@@ -1301,7 +1301,7 @@ void zremCommand(client *c) {
 
     if ((zobj = lookupKeyWriteOrReply(c, key, shared.czero)) == NULL || checkType(c, zobj, OBJ_ZSET)) return;
 
-    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtablePauseAutoShrink(((zset *)objectGetVal(zobj))->ht);
+    if (zobj->encoding == OBJ_ENCODING_BTREE) hashtablePauseAutoShrink(((zset *)objectGetVal(zobj))->ht);
     for (j = 2; j < c->argc; j++) {
         if (zsetDel(zobj, objectGetVal(c->argv[j]))) deleted++;
         if (zsetLength(zobj) == 0) {
@@ -1310,7 +1310,7 @@ void zremCommand(client *c) {
             break;
         }
     }
-    if (!keyremoved && zobj->encoding == OBJ_ENCODING_SKIPLIST) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
+    if (!keyremoved && zobj->encoding == OBJ_ENCODING_BTREE) hashtableResumeAutoShrink(((zset *)objectGetVal(zobj))->ht);
 
     if (deleted) {
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrem", key, c->db->id);
@@ -1332,14 +1332,7 @@ typedef enum {
  * The ordered index frees the item after this callback returns. */
 static void zsetIndexDeleteCallback(OrderedIndexItem *item, void *ctx) {
     hashtable *ht = ctx;
-#ifndef ORDERED_INDEX_FBTREE
-    const char *ptr;
-    size_t len;
-    orderedIndexGetElementRaw(item, &ptr, &len);
-    hashtableDelete(ht, (sds)ptr);
-#else
     hashtableDelete(ht, item);
-#endif
 }
 
 /* Implements ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX commands. */
@@ -1361,7 +1354,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
             return;
     } else if (rangetype == ZRANGE_SCORE) {
         notify_type = "zremrangebyscore";
-        if (zslParseRange(c->argv[2], c->argv[3], &range) != C_OK) {
+        if (zsetParseRange(c->argv[2], c->argv[3], &range) != C_OK) {
             addReplyError(c, "min or max is not a float");
             return;
         }
@@ -1406,7 +1399,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
             dbDelete(c->db, key);
             keyremoved = 1;
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         hashtablePauseAutoShrink(zs->ht);
         switch (rangetype) {
@@ -1539,7 +1532,7 @@ static void zuiInitIterator(zsetopsrc *op) {
                 it->zl.sptr = lpNext(it->zl.zl, it->zl.eptr);
                 serverAssert(it->zl.sptr != NULL);
             }
-        } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (op->encoding == OBJ_ENCODING_BTREE) {
             it->sl.zs = objectGetVal(op->subject);
             orderedIndexInitIterator(&it->sl.iter, it->sl.zs->oi);
             it->sl.node = NULL;
@@ -1569,7 +1562,7 @@ static void zuiClearIterator(zsetopsrc *op) {
         iterzset *it = &op->iter.zset;
         if (op->encoding == OBJ_ENCODING_LISTPACK) {
             UNUSED(it); /* skip */
-        } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (op->encoding == OBJ_ENCODING_BTREE) {
             UNUSED(it); /* skip */
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -1595,7 +1588,7 @@ static unsigned long zuiLength(zsetopsrc *op) {
     } else if (op->type == OBJ_ZSET) {
         if (op->encoding == OBJ_ENCODING_LISTPACK) {
             return zzlLength(objectGetVal(op->subject));
-        } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (op->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(op->subject);
             return orderedIndexLength(zs->oi);
         } else {
@@ -1652,7 +1645,7 @@ static int zuiNext(zsetopsrc *op, zsetopval *val) {
 
             /* Move to next element (going backwards, see zuiInitIterator). */
             zzlPrev(it->zl.zl, &it->zl.eptr, &it->zl.sptr);
-        } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (op->encoding == OBJ_ENCODING_BTREE) {
             it->sl.node = orderedIndexPrev(&it->sl.iter);
             if (it->sl.node == NULL) return 0;
             const char *val_ele_ptr;
@@ -1724,7 +1717,7 @@ static int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
             } else {
                 return 0;
             }
-        } else if (op->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (op->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(op->subject);
             void *entry;
             zsetMarkLookupKey(val->ele);
@@ -2541,7 +2534,7 @@ void genericZrangebyrankCommand(zrange_result_handler *handler,
                 zzlNext(zl, &eptr, &sptr);
         }
 
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         OrderedIndex *oi = zs->oi;
         OrderedIndexItem *ln;
@@ -2663,7 +2656,7 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         OrderedIndex *oi = zs->oi;
         OrderedIndexItem *ln;
@@ -2717,7 +2710,7 @@ void zcountCommand(client *c) {
     unsigned long count = 0;
 
     /* Parse the range arguments */
-    if (zslParseRange(c->argv[2], c->argv[3], &range) != C_OK) {
+    if (zsetParseRange(c->argv[2], c->argv[3], &range) != C_OK) {
         addReplyError(c, "min or max is not a float");
         return;
     }
@@ -2756,7 +2749,7 @@ void zcountCommand(client *c) {
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         OrderedIndex *oi = zs->oi;
 
@@ -2814,7 +2807,7 @@ void zlexcountCommand(client *c) {
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         OrderedIndex *oi = zs->oi;
 
@@ -2893,7 +2886,7 @@ void genericZrangebylexCommand(zrange_result_handler *handler,
                 zzlNext(zl, &eptr, &sptr);
             }
         }
-    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+    } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
         OrderedIndex *oi = zs->oi;
         OrderedIndexItem *ln;
@@ -3027,7 +3020,7 @@ void zrangeGenericCommand(zrange_result_handler *handler,
 
     case ZRANGE_SCORE:
         /* Z[REV]RANGEBYSCORE, ZRANGESTORE [REV]RANGEBYSCORE */
-        if (zslParseRange(c->argv[minidx], c->argv[maxidx], &range) != C_OK) {
+        if (zsetParseRange(c->argv[minidx], c->argv[maxidx], &range) != C_OK) {
             addReplyError(c, "min or max is not a float");
             return;
         }
@@ -3302,7 +3295,7 @@ void genericZpopCommand(client *c,
             sptr = lpNext(zl, eptr);
             serverAssertWithInfo(c, zobj, sptr != NULL);
             score = zzlGetScore(sptr);
-        } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        } else if (zobj->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(zobj);
             OrderedIndex *oi = zs->oi;
             OrderedIndexItem *zln;
@@ -3518,7 +3511,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             addReplyArrayLen(c, count * 2);
         else
             addReplyArrayLen(c, count);
-        if (zsetobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        if (zsetobj->encoding == OBJ_ENCODING_BTREE) {
             zset *zs = objectGetVal(zsetobj);
             while (count--) {
                 void *entry;
@@ -3627,14 +3620,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-#ifndef ORDERED_INDEX_FBTREE
-            const char *key_ptr;
-            size_t key_len;
-            orderedIndexGetElementRaw(element, &key_ptr, &key_len);
-            hashtableDelete(ht, (sds)key_ptr);
-#else
             hashtableDelete(ht, element);
-#endif
             size--;
         }
         hashtableCleanupIterator(&iter);

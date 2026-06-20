@@ -769,7 +769,7 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_LINKEDLIST 4 /* No longer used: old list encoding. */
 #define OBJ_ENCODING_ZIPLIST 5    /* No longer used: old list/hash/zset encoding. */
 #define OBJ_ENCODING_INTSET 6     /* Encoded as intset */
-#define OBJ_ENCODING_SKIPLIST 7   /* Encoded as skiplist */
+#define OBJ_ENCODING_BTREE 7      /* Encoded as btree + hashtable */
 #define OBJ_ENCODING_EMBSTR 8     /* Embedded sds string encoding */
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
@@ -2798,8 +2798,7 @@ extern hashtableType zsetHashtableType;
 
 /* Zset heterogeneous hashtable lookup: mark/unmark plain sds keys before
  * passing them to hashtable operations so zsetExtractElement can distinguish
- * them from stored packed fbtree items. No-op for skiplist backend. */
-#ifdef ORDERED_INDEX_FBTREE
+ * them from stored packed fbtree items.  */
 #define ZSET_LOOKUP_TYPE5_MARKER 6
 static inline void zsetMarkLookupKey(sds s) {
     if (sdsType(s) == SDS_TYPE_5) {
@@ -2816,14 +2815,6 @@ static inline void zsetUnmarkLookupKey(sds s) {
         sdsSetAuxBit(s, 0, 0);
     }
 }
-#else
-static inline void zsetMarkLookupKey(sds s) {
-    (void)s;
-}
-static inline void zsetUnmarkLookupKey(sds s) {
-    (void)s;
-}
-#endif
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;

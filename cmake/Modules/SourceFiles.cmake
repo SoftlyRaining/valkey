@@ -33,8 +33,6 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/t_list.c
     ${CMAKE_SOURCE_DIR}/src/t_set.c
     ${CMAKE_SOURCE_DIR}/src/t_zset.c
-    ${CMAKE_SOURCE_DIR}/src/skiplist.c
-    ${CMAKE_SOURCE_DIR}/src/skiplist_ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/ordered_index.c
     ${CMAKE_SOURCE_DIR}/src/fbtree.c
     ${CMAKE_SOURCE_DIR}/src/fbtree_ordered_index.c

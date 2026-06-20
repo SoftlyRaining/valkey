@@ -171,7 +171,7 @@ foreach command {SORT SORT_RO} {
         assert_equal [r sort zset by nosort limit -10 100] {a c e b d}
     }
 
-    test "SORT sorted set skiplist BY nosort should retain ordering" {
+    test "SORT sorted set btree BY nosort should retain ordering" {
         with_config zset-max-ziplist-entries 0 {
             r del zset
             r zadd zset 1 a
@@ -179,13 +179,13 @@ foreach command {SORT SORT_RO} {
             r zadd zset 2 c
             r zadd zset 10 d
             r zadd zset 3 e
-            assert_encoding skiplist zset
+            assert_encoding btree zset
             assert_equal [r sort zset by nosort asc] {a c e b d}
             assert_equal [r sort zset by nosort desc] {d b e c a}
         }
     }
 
-    test "SORT sorted set skiplist BY nosort + LIMIT" {
+    test "SORT sorted set btree BY nosort + LIMIT" {
         with_config zset-max-ziplist-entries 0 {
             r del zset
             r zadd zset 1 a
@@ -193,7 +193,7 @@ foreach command {SORT SORT_RO} {
             r zadd zset 2 c
             r zadd zset 10 d
             r zadd zset 3 e
-            assert_encoding skiplist zset
+            assert_encoding btree zset
             assert_equal [r sort zset by nosort asc limit 0 1] {a}
             assert_equal [r sort zset by nosort desc limit 0 1] {d}
             assert_equal [r sort zset by nosort asc limit 0 2] {a c}
@@ -203,7 +203,7 @@ foreach command {SORT SORT_RO} {
         }
     }
 
-    test "SORT sorted set skiplist with BY pattern" {
+    test "SORT sorted set btree with BY pattern" {
         with_config zset-max-ziplist-entries 0 {
             r del zset
             r zadd zset 1 a
@@ -211,7 +211,7 @@ foreach command {SORT SORT_RO} {
             r zadd zset 2 c
             r zadd zset 10 d
             r zadd zset 3 e
-            assert_encoding skiplist zset
+            assert_encoding btree zset
             assert_equal [r sort zset alpha desc] {e d c b a}
         }
     }

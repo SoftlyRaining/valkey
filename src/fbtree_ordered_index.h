@@ -10,8 +10,8 @@
 /* fbtree (flat B+ tree) backend for the OrderedIndex interface.
  *
  * This file declares the fbtree-specific implementations of all OrderedIndex
- * operations. These are called by ordered_index.c (the dispatch layer) when
- * ORDERED_INDEX_FBTREE is defined, and should not be called directly.
+ * operations. These are called by ordered_index.c (the dispatch layer)
+ * and should not be called directly.
  *
  * The fbtree stores [8-byte normalized score][element] as its key, enabling
  * lexicographic byte comparison to match numeric score ordering. */

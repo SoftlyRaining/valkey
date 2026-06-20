@@ -12,7 +12,6 @@
 extern "C" {
 #include "fbtree_ordered_index.h"
 #include "ordered_index.h"
-#include "skiplist_ordered_index.h"
 }
 
 #include <string>
@@ -69,105 +68,6 @@ class OrderedIndexTestApi {
     /* Convenience (non-virtual) */
     OrderedIndexItem *insertSds(OrderedIndex *oi, double score, const_sds ele) {
         return insert(oi, score, ele, sdslen(ele));
-    }
-};
-
-/* ---- Skiplist implementation ---- */
-
-class SkiplistOrderedIndex : public OrderedIndexTestApi {
-  public:
-    OrderedIndex *create() override {
-        return skiplistCreate();
-    }
-    void free(OrderedIndex *oi) override {
-        skiplistFree(oi);
-    }
-
-    OrderedIndexItem *insert(OrderedIndex *oi, double score, const char *ele, size_t len) override {
-        return skiplistInsert(oi, score, ele, len);
-    }
-    void deleteItem(OrderedIndex *oi, OrderedIndexItem *pos) override {
-        skiplistDelete(oi, pos);
-    }
-    OrderedIndexItem *updateScore(OrderedIndex *oi, OrderedIndexItem *pos, double newscore) override {
-        return skiplistUpdateScore(oi, pos, newscore);
-    }
-    OrderedIndexItem *popFirst(OrderedIndex *oi) override {
-        return skiplistPopFirst(oi);
-    }
-    OrderedIndexItem *popLast(OrderedIndex *oi) override {
-        return skiplistPopLast(oi);
-    }
-    void freeItem(OrderedIndexItem *item) override {
-        skiplistFreeItem(item);
-    }
-    unsigned long deleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByScore(oi, min, max, min_ex, max_ex, on_delete, ctx);
-    }
-    unsigned long deleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByIndex(oi, start, end, on_delete, ctx);
-    }
-    unsigned long deleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) override {
-        return skiplistDeleteRangeByLex(oi, min, max, min_ex, max_ex, on_delete, ctx);
-    }
-
-    unsigned long length(OrderedIndex *oi) override {
-        return skiplistLength(oi);
-    }
-    OrderedIndexItem *getByIndex(OrderedIndex *oi, unsigned long rank) override {
-        return skiplistGetByIndex(oi, rank);
-    }
-    OrderedIndexItem *getFirst(OrderedIndex *oi) override {
-        return skiplistGetFirst(oi);
-    }
-    OrderedIndexItem *getLast(OrderedIndex *oi) override {
-        return skiplistGetLast(oi);
-    }
-    unsigned long getIndex(OrderedIndex *oi, const OrderedIndexItem *pos) override {
-        return skiplistGetIndex(oi, pos);
-    }
-    void getElementRaw(const OrderedIndexItem *pos, const char **ptr, size_t *len) override {
-        skiplistGetElementRaw(pos, ptr, len);
-    }
-    double getScore(const OrderedIndexItem *pos) override {
-        return skiplistGetScore(pos);
-    }
-
-    size_t estimateMemory(OrderedIndex *oi, size_t sample_size) override {
-        return skiplistEstimateMemory(oi, sample_size);
-    }
-
-    int verifyIntegrity(OrderedIndex *oi, char *errmsg, size_t errmsg_len) override {
-        return skiplistVerifyIntegrity(oi, errmsg, errmsg_len);
-    }
-
-    unsigned long countScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex) override {
-        return skiplistCountScoreRange(oi, min, max, min_ex, max_ex);
-    }
-    unsigned long countLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) override {
-        return skiplistCountLexRange(oi, min, max, min_ex, max_ex);
-    }
-
-    void initIterator(OrderedIndexIterator *iter, OrderedIndex *oi) override {
-        skiplistInitIterator(iter, oi);
-    }
-    void resetIterator(OrderedIndexIterator *iter) override {
-        skiplistResetIterator(iter);
-    }
-    OrderedIndexItem *next(OrderedIndexIterator *iter) override {
-        return skiplistNext(iter);
-    }
-    OrderedIndexItem *prev(OrderedIndexIterator *iter) override {
-        return skiplistPrev(iter);
-    }
-    void seekToIndex(OrderedIndexIterator *iter, unsigned long rank) override {
-        skiplistSeekToIndex(iter, rank);
-    }
-    void seekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) override {
-        skiplistSeekToScoreRange(iter, min, max, min_ex, max_ex, offset);
-    }
-    void seekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) override {
-        skiplistSeekToLexRange(iter, min, max, min_ex, max_ex, offset);
     }
 };
 
@@ -272,11 +172,9 @@ class FbtreeOrderedIndex : public OrderedIndexTestApi {
 
 /* ---- Static instances & test parameterization helpers ---- */
 
-static SkiplistOrderedIndex skiplistImpl;
 static FbtreeOrderedIndex fbtreeImpl;
 
 static std::string orderedIndexTestName(const ::testing::TestParamInfo<OrderedIndexTestApi *> &info) {
-    if (info.param == &skiplistImpl) return "Skiplist";
     if (info.param == &fbtreeImpl) return "Fbtree";
     return "Unknown";
 }

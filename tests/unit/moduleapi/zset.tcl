@@ -50,7 +50,7 @@ start_server {tags {"modules"}} {
         assert_error "invalid range" {r zset.rangebylex k - a}
         assert_error "invalid range" {r zset.revrangebylex k - a}
 
-        # Check if the data structure of the sorted set is skiplist
+        # Check if the data structure of the sorted set is btree
         r del k
         r config set zset-max-listpack-entries 2
         r config set zset-max-listpack-value 64
@@ -84,7 +84,7 @@ start_server {tags {"modules"}} {
         r set k v
         assert_error "WRONGTYPE Operation against a key*" {r zset.members k}
 
-        # Check if the data structure of the sorted set is skiplist
+        # Check if the data structure of the sorted set is btree
         r del k
         r config set zset-max-listpack-entries 2
         r config set zset-max-listpack-value 64
