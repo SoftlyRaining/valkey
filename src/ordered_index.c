@@ -5,7 +5,7 @@
  */
 
 /* OrderedIndex implementation — delegates to the active backend.
- * Default: skiplist. Build with ORDERED_INDEX_FBTREE=yes to use fbtree. */
+ * Default: fbtree. Build with ORDERED_INDEX_SKIPLIST=yes to use skiplist. */
 
 // clang-format off
 #include "ordered_index.h"
