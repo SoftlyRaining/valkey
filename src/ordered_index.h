@@ -20,10 +20,9 @@
  * membership testing and prevents duplicate insertions. The caller is
  * responsible for checking the hashtable before inserting.
  *
- * The interface is implementation-agnostic. Currently implemented as a skiplist
- * (see skiplist_ordered_index.c). A B+ tree implementation is planned. Implementation
- * selection is resolved at link time — all orderedIndex* functions are
- * implemented in ordered_index.c which delegates to the active implementation. */
+ * The interface is implementation-agnostic. Currently implemented as a B+ tree
+ * (see fbtree_ordered_index.c). All orderedIndex* functions are
+ * implemented in ordered_index.c which delegates to the fbtree backend. */
 
 #include "sds.h"
 #include <stddef.h>

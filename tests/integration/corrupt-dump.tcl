@@ -770,7 +770,7 @@ test {corrupt payload: fuzzer findings - invalid access in ziplist tail prevlen 
     }
 }
 
-test {corrupt payload: fuzzer findings - zset zslInsert with a NAN score} {
+test {corrupt payload: fuzzer findings - zset orderedIndexInsert with a NAN score} {
     start_server [list overrides [list loglevel verbose use-exit-on-panic yes crash-memcheck-enabled no] ] {
         r config set sanitize-dump-payload no
         r debug set-skip-checksum-validation 1

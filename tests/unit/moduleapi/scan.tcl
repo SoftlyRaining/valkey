@@ -37,10 +37,10 @@ start_server {tags {"modules"}} {
         lsort [r scan.scan_key zz]
     } {{f1 1} {f2 2}}
 
-    test {Module scan zset skiplist} {
+    test {Module scan zset btree} {
         r config set zset-max-ziplist-entries 2
         r zadd zz1 1 f1 2 f2 3 f3
-        assert_encoding skiplist zz1
+        assert_encoding btree zz1
         lsort [r scan.scan_key zz1]
     } {{f1 1} {f2 2} {f3 3}}
 

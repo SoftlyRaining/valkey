@@ -627,8 +627,6 @@ hashtableType setHashtableType = {
     .entryDestructor = dictSdsDestructor};
 
 /* ========== Zset Hashtable Type ==========
- * Separate implementations for skiplist and fbtree backends.
- * The skiplist backend stores plain sds elements in the hashtable.
  * The fbtree backend stores packed sds items ([8B score][element]) and uses
  * lookup-key marking for heterogeneous hashtable lookups. */
 

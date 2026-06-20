@@ -6,157 +6,154 @@
 
 /* OrderedIndex implementation — delegates to the fbtree backend. */
 
-// clang-format off
 #include "ordered_index.h"
 
 #include "fbtree_ordered_index.h"
-#define BACKEND(fn) fbtreeOI##fn
-// clang-format on
 
 /* Lifecycle */
 
 OrderedIndex *orderedIndexCreate(void) {
-    return BACKEND(Create)();
+    return fbtreeOICreate();
 }
 
 void orderedIndexFree(OrderedIndex *oi) {
-    BACKEND(Free)(oi);
+    fbtreeOIFree(oi);
 }
 
 /* Modification */
 
 OrderedIndexItem *orderedIndexInsert(OrderedIndex *oi, double score, const char *ele, size_t len) {
-    return BACKEND(Insert)(oi, score, ele, len);
+    return fbtreeOIInsert(oi, score, ele, len);
 }
 
 void orderedIndexDelete(OrderedIndex *oi, OrderedIndexItem *item) {
-    BACKEND(Delete)(oi, item);
+    fbtreeOIDelete(oi, item);
 }
 
 OrderedIndexItem *orderedIndexUpdateScore(OrderedIndex *oi, OrderedIndexItem *item, double newscore) {
-    return BACKEND(UpdateScore)(oi, item, newscore);
+    return fbtreeOIUpdateScore(oi, item, newscore);
 }
 
 OrderedIndexItem *orderedIndexPopFirst(OrderedIndex *oi) {
-    return BACKEND(PopFirst)(oi);
+    return fbtreeOIPopFirst(oi);
 }
 
 OrderedIndexItem *orderedIndexPopLast(OrderedIndex *oi) {
-    return BACKEND(PopLast)(oi);
+    return fbtreeOIPopLast(oi);
 }
 
 void orderedIndexFreeItem(OrderedIndexItem *item) {
-    BACKEND(FreeItem)(item);
+    fbtreeOIFreeItem(item);
 }
 
 OrderedIndexItem *orderedIndexCreateDetached(double score, const char *ele, size_t len) {
-    return BACKEND(CreateDetached)(score, ele, len);
+    return fbtreeOICreateDetached(score, ele, len);
 }
 
 void orderedIndexDetachedSetScore(OrderedIndexItem *item, double score) {
-    BACKEND(DetachedSetScore)(item, score);
+    fbtreeOIDetachedSetScore(item, score);
 }
 
 OrderedIndexItem *orderedIndexInsertDetached(OrderedIndex *oi, OrderedIndexItem *item) {
-    return BACKEND(InsertDetached)(oi, item);
+    return fbtreeOIInsertDetached(oi, item);
 }
 
 unsigned long orderedIndexDeleteRangeByScore(OrderedIndex *oi, double min, double max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    return BACKEND(DeleteRangeByScore)(oi, min, max, min_ex, max_ex, on_delete, ctx);
+    return fbtreeOIDeleteRangeByScore(oi, min, max, min_ex, max_ex, on_delete, ctx);
 }
 
 unsigned long orderedIndexDeleteRangeByIndex(OrderedIndex *oi, unsigned long start, unsigned long end, OrderedIndexOnDelete on_delete, void *ctx) {
-    return BACKEND(DeleteRangeByIndex)(oi, start, end, on_delete, ctx);
+    return fbtreeOIDeleteRangeByIndex(oi, start, end, on_delete, ctx);
 }
 
 unsigned long orderedIndexDeleteRangeByLex(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex, OrderedIndexOnDelete on_delete, void *ctx) {
-    return BACKEND(DeleteRangeByLex)(oi, min, max, min_ex, max_ex, on_delete, ctx);
+    return fbtreeOIDeleteRangeByLex(oi, min, max, min_ex, max_ex, on_delete, ctx);
 }
 
 /* Query */
 
 unsigned long orderedIndexLength(OrderedIndex *oi) {
-    return BACKEND(Length)(oi);
+    return fbtreeOILength(oi);
 }
 
 OrderedIndexItem *orderedIndexGetByIndex(OrderedIndex *oi, unsigned long index) {
-    return BACKEND(GetByIndex)(oi, index);
+    return fbtreeOIGetByIndex(oi, index);
 }
 
 OrderedIndexItem *orderedIndexGetFirst(OrderedIndex *oi) {
-    return BACKEND(GetFirst)(oi);
+    return fbtreeOIGetFirst(oi);
 }
 
 OrderedIndexItem *orderedIndexGetLast(OrderedIndex *oi) {
-    return BACKEND(GetLast)(oi);
+    return fbtreeOIGetLast(oi);
 }
 
 unsigned long orderedIndexGetIndex(OrderedIndex *oi, const OrderedIndexItem *item) {
-    return BACKEND(GetIndex)(oi, item);
+    return fbtreeOIGetIndex(oi, item);
 }
 
 void orderedIndexGetElementRaw(const OrderedIndexItem *item, const char **ptr, size_t *len) {
-    BACKEND(GetElementRaw)(item, ptr, len);
+    fbtreeOIGetElementRaw(item, ptr, len);
 }
 
 double orderedIndexGetScore(const OrderedIndexItem *item) {
-    return BACKEND(GetScore)(item);
+    return fbtreeOIGetScore(item);
 }
 
 unsigned long orderedIndexCountScoreRange(OrderedIndex *oi, double min, double max, int min_ex, int max_ex) {
-    return BACKEND(CountScoreRange)(oi, min, max, min_ex, max_ex);
+    return fbtreeOICountScoreRange(oi, min, max, min_ex, max_ex);
 }
 
 unsigned long orderedIndexCountLexRange(OrderedIndex *oi, const_sds min, const_sds max, int min_ex, int max_ex) {
-    return BACKEND(CountLexRange)(oi, min, max, min_ex, max_ex);
+    return fbtreeOICountLexRange(oi, min, max, min_ex, max_ex);
 }
 
 /* Iterator */
 
 void orderedIndexInitIterator(OrderedIndexIterator *iter, OrderedIndex *oi) {
-    BACKEND(InitIterator)(iter, oi);
+    fbtreeOIInitIterator(iter, oi);
 }
 
 void orderedIndexResetIterator(OrderedIndexIterator *iter) {
-    BACKEND(ResetIterator)(iter);
+    fbtreeOIResetIterator(iter);
 }
 
 OrderedIndexItem *orderedIndexNext(OrderedIndexIterator *iter) {
-    return BACKEND(Next)(iter);
+    return fbtreeOINext(iter);
 }
 
 OrderedIndexItem *orderedIndexPrev(OrderedIndexIterator *iter) {
-    return BACKEND(Prev)(iter);
+    return fbtreeOIPrev(iter);
 }
 
 void orderedIndexSeekToIndex(OrderedIndexIterator *iter, unsigned long index) {
-    BACKEND(SeekToIndex)(iter, index);
+    fbtreeOISeekToIndex(iter, index);
 }
 
 void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double max, int min_ex, int max_ex, long offset) {
-    BACKEND(SeekToScoreRange)(iter, min, max, min_ex, max_ex, offset);
+    fbtreeOISeekToScoreRange(iter, min, max, min_ex, max_ex, offset);
 }
 
 void orderedIndexSeekToLexRange(OrderedIndexIterator *iter, const_sds min, const_sds max, int min_ex, int max_ex, long offset) {
-    BACKEND(SeekToLexRange)(iter, min, max, min_ex, max_ex, offset);
+    fbtreeOISeekToLexRange(iter, min, max, min_ex, max_ex, offset);
 }
 
 /* Memory */
 
 void orderedIndexDismissMemory(OrderedIndex *oi) {
-    BACKEND(DismissMemory)(oi);
+    fbtreeOIDismissMemory(oi);
 }
 
 size_t orderedIndexEstimateMemory(OrderedIndex *oi, size_t sample_size) {
-    return BACKEND(EstimateMemory)(oi, sample_size);
+    return fbtreeOIEstimateMemory(oi, sample_size);
 }
 
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *)) {
-    return BACKEND(DefragInternals)(oi, defragfn);
+    return fbtreeOIDefragInternals(oi, defragfn);
 }
 
 unsigned long orderedIndexScanDefrag(OrderedIndex *oi, unsigned long cursor, OrderedIndexDefragCallback callback, void *ctx, void *(*defragfn)(void *)) {
-    return BACKEND(ScanDefrag)(oi, cursor, callback, ctx, defragfn);
+    return fbtreeOIScanDefrag(oi, cursor, callback, ctx, defragfn);
 }
 
 /* Not declared in ordered_index.h — debug-only introspection. */

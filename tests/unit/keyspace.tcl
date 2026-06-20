@@ -311,14 +311,14 @@ foreach {type large} [array get largevalue] {
         assert_equal $digest [debug_digest_value newzset1{t}]
     }
 
-     test {COPY basic usage for skiplist sorted set} {
+     test {COPY basic usage for btree sorted set} {
         r del zset2{t} newzset2{t}
         set original_max [lindex [r config get zset-max-ziplist-entries] 1]
         r config set zset-max-ziplist-entries 0
         for {set j 0} {$j < 130} {incr j} {
             r zadd zset2{t} [randomInt 50] ele-[randomInt 10]
         }
-        assert_encoding skiplist zset2{t}
+        assert_encoding btree zset2{t}
         r copy zset2{t} newzset2{t}
         set digest [debug_digest_value zset2{t}]
         assert_equal $digest [debug_digest_value newzset2{t}]
