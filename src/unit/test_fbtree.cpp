@@ -3462,8 +3462,6 @@ TEST_F(FbtreeTest, DeleteRangeByRankSweep) {
  * holds after deleting from the left edge. */
 
 
-
-
 TEST_F(FbtreeTest, DeleteRangeCallbackNull) {
     for (int i = 0; i < 20; i++) {
         fbtreeInsert(fbt, createBase26TestString("", "", i, 3));
@@ -4213,5 +4211,3 @@ TEST_F(FbtreeTest, PropertySeekCorrectAfterRangeDelete) {
         fbtreeFree(tree);
     }
 }
-
-
