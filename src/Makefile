@@ -764,7 +764,7 @@ $(MICROBENCH_NAME): $(MICROBENCH_OBJ) $(MICROBENCH_SERVER_OBJ) .make-prerequisit
 	$(CXX) $(filter-out -flto%,$(FINAL_LDFLAGS)) -o $@ $(filter-out .make-prerequisites,$^) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) -lbenchmark -lpthread
 
 # C++ flags for benchmarks (filter out C-specific flags from FINAL_CFLAGS)
-MICROBENCH_CXXFLAGS = -std=c++20 -O3 -Wall -Wno-pedantic -Ibenchmarks
+MICROBENCH_CXXFLAGS = -std=c++17 -O3 -Wall -Wno-pedantic -Ibenchmarks
 MICROBENCH_CFLAGS = $(filter-out -std=gnu11 -std=c99 -Wstrict-prototypes -pedantic,$(FINAL_CFLAGS))
 
 benchmarks/%.o: benchmarks/%.cpp .make-prerequisites
