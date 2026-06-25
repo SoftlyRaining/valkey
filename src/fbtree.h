@@ -33,7 +33,7 @@ bool fbtreePrev(fbtreeIterator *iterator, const_sds *pos);
 
 void fbtreeSeekToRank(fbtreeIterator *iterator, unsigned long rank);
 const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank);
-long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item);
+long fbtreeGetIndexOfItem(fbtreeIndex *fbt, const_sds item);
 
 /* Score seek - positions iterator at first element with score >= given score.
  * Always positions the iterator (even if no exact match). Use fbtreeNext to get elements.

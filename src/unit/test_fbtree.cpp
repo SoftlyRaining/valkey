@@ -140,10 +140,10 @@ TEST_F(FbtreeTest, InsertAndLookup) {
     sds inserted = insert("hello");
     expectValid();
 
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted), 0);
 
     sds missing = createString("world");
-    EXPECT_LT(fbtreeGetRankOfItem(fbt, missing), 0);
+    EXPECT_LT(fbtreeGetIndexOfItem(fbt, missing), 0);
     sdsfree(missing);
 }
 
@@ -156,18 +156,18 @@ TEST_F(FbtreeTest, InsertMultiple) {
     expectValid();
 
     for (int i = 0; i < 6; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
 
     sds missing = createString("fig");
-    EXPECT_LT(fbtreeGetRankOfItem(fbt, missing), 0);
+    EXPECT_LT(fbtreeGetIndexOfItem(fbt, missing), 0);
     sdsfree(missing);
 }
 
 TEST_F(FbtreeTest, LookupEmptyTree) {
     expectValid();
     sds s = createString("anything");
-    EXPECT_LT(fbtreeGetRankOfItem(fbt, s), 0);
+    EXPECT_LT(fbtreeGetIndexOfItem(fbt, s), 0);
     sdsfree(s);
 }
 
@@ -190,14 +190,14 @@ TEST_F(FbtreeTest, DuplicateInsert) {
     EXPECT_EQ(fbtreeLength(fbt), 2u);
     expectValid();
 
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, ins1), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, ins2), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, ins1), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, ins2), 0);
 }
 
 TEST_F(FbtreeTest, EmptyString) {
     sds inserted = insert("");
     expectValid();
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted), 0);
 }
 
 TEST_F(FbtreeTest, LongStrings) {
@@ -207,7 +207,7 @@ TEST_F(FbtreeTest, LongStrings) {
 
     sds inserted = insert(long_str);
     expectValid();
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted), 0);
 }
 
 /* Binary data with embedded null bytes - sds handles this, tree should too. */
@@ -223,9 +223,9 @@ TEST_F(FbtreeTest, BinaryDataWithNullBytes) {
     expectValid();
 
     EXPECT_EQ(fbtreeLength(fbt), 3u);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, s1), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, s2), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, s3), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, s1), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, s2), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, s3), 0);
 
     /* Verify sorted order via iteration */
     fbtreeIterator it;
@@ -399,7 +399,7 @@ TEST_F(FbtreeTest, CommonPrefixOrdering) {
     expectValid();
 
     for (int i = 0; i < 12; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
 
     fbtreeIterator it;
@@ -612,15 +612,15 @@ TEST_F(FbtreeTest, MultilevelLookup) {
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
     sds s1 = createString("k99");
-    EXPECT_LT(fbtreeGetRankOfItem(fbt, s1), 0);
+    EXPECT_LT(fbtreeGetIndexOfItem(fbt, s1), 0);
     sdsfree(s1);
     sds s2 = createString("x00");
-    EXPECT_LT(fbtreeGetRankOfItem(fbt, s2), 0);
+    EXPECT_LT(fbtreeGetIndexOfItem(fbt, s2), 0);
     sdsfree(s2);
 }
 
@@ -734,7 +734,7 @@ TEST_F(FbtreeTest, InnerSplitSequential) {
     EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
@@ -829,12 +829,12 @@ TEST_F(FbtreeTest, DeepTree4Levels) {
     expectValid();
     EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, first_item), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, middle_item), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, last_item), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, first_item), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, middle_item), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, last_item), 0);
 
     sds search_str = createString("deep_300000");
-    EXPECT_LT(fbtreeGetRankOfItem(fbt, search_str), 0);
+    EXPECT_LT(fbtreeGetIndexOfItem(fbt, search_str), 0);
     sdsfree(search_str);
 
     fbtreeIterator it;
@@ -927,7 +927,7 @@ TEST_F(FbtreeTest, VariedStringPatterns) {
     EXPECT_EQ(fbtreeLength(fbt), 4000u);
 
     for (int i = 0; i < 4000; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
@@ -961,7 +961,7 @@ TEST_F(FbtreeTest, SplitAtExactBoundary) {
     sds boundary_item = insert(buf);
     expectValid();
     EXPECT_EQ(fbtreeLength(fbt), (size_t)(count + 1));
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, boundary_item), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, boundary_item), 0);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -996,7 +996,7 @@ TEST_F(FbtreeTest, AlternatingMinMaxInsert) {
     EXPECT_EQ(fbtreeLength(fbt), (size_t)count);
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
     zfree(inserted);
 
@@ -1075,7 +1075,7 @@ TEST_F(FbtreeTest, DeleteNonexistent) {
     EXPECT_FALSE(fbtreeDelete(fbt, other));
     sdsfree(other);
 
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted), 0);
 }
 
 TEST_F(FbtreeTest, DeleteFromEmpty) {
@@ -1118,8 +1118,8 @@ TEST_F(FbtreeTest, DeleteMiddleItem) {
 
     EXPECT_TRUE(fbtreeDelete(fbt, inserted[25]));
     EXPECT_EQ(fbtreeLength(fbt), 49u);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[24]), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[26]), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[24]), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[26]), 0);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -1142,7 +1142,7 @@ TEST_F(FbtreeTest, DeleteMaxUpdatesAnchor) {
     EXPECT_TRUE(fbtreeDelete(fbt, inserted[199]));
     EXPECT_EQ(fbtreeLength(fbt), 199u);
     expectValid();
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[198]), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[198]), 0);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -1298,10 +1298,10 @@ TEST_F(FbtreeTest, InterleavedInsertDelete) {
 
     /* Verify all remaining items are findable */
     for (int i = 1; i < batch; i += 2) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
     for (int i = 0; i < batch; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, new_inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, new_inserted[i]), 0);
     }
 
     /* Verify sorted iteration */
@@ -1388,12 +1388,12 @@ TEST_F(FbtreeTest, GetRankOfItem) {
         inserted[i] = insert(buf);
     }
 
-    EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[0]), 0);
-    EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[50]), 50);
-    EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[99]), 99);
+    EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[0]), 0);
+    EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[50]), 50);
+    EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[99]), 99);
 
     sds search = createString("key_100");
-    EXPECT_EQ(fbtreeGetRankOfItem(fbt, search), -1);
+    EXPECT_EQ(fbtreeGetIndexOfItem(fbt, search), -1);
     sdsfree(search);
 }
 
@@ -1543,7 +1543,7 @@ TEST_F(FbtreeTest, RankDeepTree) {
         EXPECT_EQ(fbtreeGetAtRank(fbt, i), inserted[i]);
     }
     for (int i = 0; i < count; i += count / 10) {
-        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i);
+        EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[i]), i);
     }
     zfree(inserted);
 }
@@ -1787,9 +1787,9 @@ TEST_F(FbtreeTest, InnerBsearchIdenticalFeatureBytes) {
     EXPECT_EQ(fbtreeLength(fbt), (size_t)(count + 1));
 
     for (int i = 0; i < count; i++) {
-        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i + 1);
+        EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[i]), i + 1);
     }
-    EXPECT_EQ(fbtreeGetRankOfItem(fbt, outlier), 0);
+    EXPECT_EQ(fbtreeGetIndexOfItem(fbt, outlier), 0);
 
     fbtreeIterator it;
     fbtreeInitIterator(&it, fbt);
@@ -1822,7 +1822,7 @@ TEST_F(FbtreeTest, LongPrefixBasic) {
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i);
+        EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[i]), i);
     }
 
     fbtreeIterator it;
@@ -1852,7 +1852,7 @@ TEST_F(FbtreeTest, VeryLongPrefix) {
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_EQ(fbtreeGetRankOfItem(fbt, inserted[i]), i);
+        EXPECT_EQ(fbtreeGetIndexOfItem(fbt, inserted[i]), i);
     }
 
     fbtreeIterator it;
@@ -1909,7 +1909,7 @@ TEST_F(FbtreeTest, LongPrefixDelete) {
     expectValid();
 
     for (int i = 1; i < count; i += 2) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
 
     zfree(inserted);
@@ -1930,7 +1930,7 @@ TEST_F(FbtreeTest, LongPrefixBoundary) {
         }
         EXPECT_TRUE(fbtreeDebugValidate(fbt1, false));
         for (int i = 0; i < count; i++)
-            EXPECT_GE(fbtreeGetRankOfItem(fbt1, inserted[i]), 0);
+            EXPECT_GE(fbtreeGetIndexOfItem(fbt1, inserted[i]), 0);
         zfree(inserted);
         fbtreeFree(fbt1);
     }
@@ -1945,7 +1945,7 @@ TEST_F(FbtreeTest, LongPrefixBoundary) {
         }
         EXPECT_TRUE(fbtreeDebugValidate(fbt2, false));
         for (int i = 0; i < count; i++)
-            EXPECT_GE(fbtreeGetRankOfItem(fbt2, inserted[i]), 0);
+            EXPECT_GE(fbtreeGetIndexOfItem(fbt2, inserted[i]), 0);
         zfree(inserted);
         fbtreeFree(fbt2);
     }
@@ -1967,15 +1967,15 @@ TEST_F(FbtreeTest, LongPrefixShrinkToShort) {
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, outlier), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, outlier), 0);
 
     EXPECT_TRUE(fbtreeDelete(fbt, outlier));
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
 
     zfree(inserted);
@@ -2008,17 +2008,17 @@ TEST_F(FbtreeTest, LongPrefixRealloc) {
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, item_mid), 0);
-    EXPECT_GE(fbtreeGetRankOfItem(fbt, item_longer), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, item_mid), 0);
+    EXPECT_GE(fbtreeGetIndexOfItem(fbt, item_longer), 0);
 
     EXPECT_TRUE(fbtreeDelete(fbt, item_mid));
     EXPECT_TRUE(fbtreeDelete(fbt, item_longer));
     expectValid();
 
     for (int i = 0; i < count; i++) {
-        EXPECT_GE(fbtreeGetRankOfItem(fbt, inserted[i]), 0);
+        EXPECT_GE(fbtreeGetIndexOfItem(fbt, inserted[i]), 0);
     }
 
     zfree(inserted);
@@ -4050,7 +4050,7 @@ TEST_F(FbtreeTest, LookupAfterPrefixGrowthFromBulkDelete) {
     /* Now look up items that are still in the tree — especially the early
      * ones whose prefix diverges from the parent's grown prefix */
     for (unsigned long i = 0; i < start; i++) {
-        long rank = fbtreeGetRankOfItem(fbt, inserted[i]);
+        long rank = fbtreeGetIndexOfItem(fbt, inserted[i]);
         EXPECT_GE(rank, 0) << "Failed to find item at original index " << i;
     }
 
@@ -4081,7 +4081,7 @@ TEST_F(FbtreeTest, LookupAfterPrefixGrowthFromBulkDelete) {
 }
 
 /* After any range delete, all remaining items must be findable
- * via fbtreeGetRankOfItem. This catches lookup routing bugs. */
+ * via fbtreeGetIndexOfItem. This catches lookup routing bugs. */
 TEST_F(FbtreeTest, PropertyAllItemsFindableAfterRangeDelete) {
     fbtreeFree(fbt);
     fbt = nullptr;
@@ -4121,7 +4121,7 @@ TEST_F(FbtreeTest, PropertyAllItemsFindableAfterRangeDelete) {
         for (unsigned long r = 0; r < remaining; r++) {
             const_sds at_rank = fbtreeGetAtRank(tree, r);
             ASSERT_NE(at_rank, nullptr) << "iter=" << iter << " rank=" << r;
-            long found_rank = fbtreeGetRankOfItem(tree, at_rank);
+            long found_rank = fbtreeGetIndexOfItem(tree, at_rank);
             ASSERT_EQ(found_rank, (long)r)
                 << "iter=" << iter << " rank=" << r
                 << " item found at wrong rank " << found_rank;

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-/* OrderedIndex implementation backed by fbtree (flat B+tree).
+/* OrderedIndex implementation backed by fbtree (feature B+tree).
  *
  * The fbtree stores packed keys: [8-byte normalized score][element bytes].
  * Lexicographic byte comparison of packed keys gives correct score+element
@@ -227,7 +227,7 @@ OrderedIndexItem *orderedIndexGetLast(const OrderedIndex *oi) {
 }
 
 unsigned long orderedIndexGetIndex(const OrderedIndex *oi, const OrderedIndexItem *item) {
-    long rank = fbtreeGetRankOfItem((fbtreeIndex *)oi, (const_sds)item);
+    long rank = fbtreeGetIndexOfItem((fbtreeIndex *)oi, (const_sds)item);
     return (unsigned long)rank;
 }
 

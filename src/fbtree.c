@@ -1129,7 +1129,7 @@ const_sds fbtreeGetAtRank(fbtreeIndex *fbt, unsigned long rank) {
 
 /* Get rank of an item given a direct pointer to it (from hashtable lookup).
  * The item pointer must be a valid pointer into a leaf node's values array. */
-long fbtreeGetRankOfItem(fbtreeIndex *fbt, const_sds item) {
+long fbtreeGetIndexOfItem(fbtreeIndex *fbt, const_sds item) {
     if (!fbt->root || !item) return -1;
 
     long rank = 0;
