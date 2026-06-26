@@ -245,6 +245,11 @@ unsigned long orderedIndexCountScoreRange(const OrderedIndex *oi, double min, do
     fbtreeInitIterator(&iter, (fbtreeIndex *)oi);
     uint64_t min_sortable = scoreToSortable(min);
     if (min_ex) {
+        /* Advance to the next representable score value. scoreToSortable maps
+         * doubles to uint64 preserving order, so +1 in sortable space is
+         * equivalent to nextafter(score, +inf) in double space. We operate on
+         * the sortable representation because it's big-endian and the increment
+         * must happen in native byte order. */
         uint64_t native = ntohu64(min_sortable);
         native++;
         min_sortable = htonu64(native);
@@ -412,6 +417,7 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
     if (offset >= 0) {
         sortable = scoreToSortable(min);
         if (min_ex) {
+            /* Next representable score (see orderedIndexCountScoreRange). */
             uint64_t native = ntohu64(sortable);
             native++;
             sortable = htonu64(native);
@@ -419,6 +425,7 @@ void orderedIndexSeekToScoreRange(OrderedIndexIterator *iter, double min, double
     } else {
         sortable = scoreToSortable(max);
         if (!max_ex) {
+            /* Next representable score — seek past max so prev() returns it. */
             uint64_t native = ntohu64(sortable);
             native++;
             sortable = htonu64(native);
