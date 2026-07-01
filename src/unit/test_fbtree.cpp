@@ -4513,7 +4513,7 @@ TEST_F(FbtreeTest, DISABLED_CompactionLoadFactorSweep) {
         }
 
         /* 50/50 churn: delete a pseudo-random live key, insert a fresh one. */
-        unsigned long rng = 0x9e3779b97f4a7c15ULL;
+        unsigned long long rng = 0x9e3779b97f4a7c15ULL;
         for (int i = 0; i < CHURN; i++) {
             rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
             int idx = (int)((rng >> 33) % (unsigned)LIVE);
