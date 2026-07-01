@@ -4452,6 +4452,43 @@ TEST_F(FbtreeTest, CompactAlreadyPackedNoop) {
     EXPECT_LE(fbtreeNumLeaves(fbt), leaves_before);
 }
 
+/* Compaction lands at (just under) the requested target fill, never above it,
+ * and is monotonic in the target -- while conserving items and staying valid.
+ * This pins the "desired load factor" contract, not just "load factor rose". */
+TEST_F(FbtreeTest, CompactLandsNearTarget) {
+    const double cap = (double)NODE_SIZE;
+    buildSparseTree(fbt, (size_t)TEST_TWO_LEVEL_ITEMS + 500);
+    std::vector<std::string> before = collectForward();
+    ASSERT_LT(fbtreeLoadFactor(fbt), 0.6); /* starts sparse */
+
+    /* Increasing targets on the same tree: compaction only ever reduces leaf
+     * count, so each pass packs at least as tightly as the last. */
+    const unsigned int targets[] = {(unsigned int)(cap * 0.60), (unsigned int)(cap * 0.75),
+                                    (unsigned int)(cap * 0.90)};
+    double prev_lf = 0.0;
+    for (unsigned int target : targets) {
+        unsigned long cursor = 0;
+        int guard = 0;
+        do {
+            cursor = fbtreeCompactStep(fbt, cursor, target, 1000000UL);
+            ASSERT_LT(guard++, 1000000) << "compaction did not terminate";
+        } while (cursor != 0);
+
+        expectValid();
+        EXPECT_EQ(collectForward(), before); /* items + order conserved every pass */
+
+        double expected = (double)target / cap;
+        double lf = fbtreeLoadFactor(fbt);
+        /* Never packs beyond the requested fill (leaves have headroom), and lands
+         * within one partial boundary-leaf-per-bottom-node of it below. */
+        EXPECT_LE(lf, expected + 0.02) << "target=" << target << " lf=" << lf;
+        EXPECT_GE(lf, expected - 0.15) << "target=" << target << " lf=" << lf;
+        /* Monotonic: a higher target yields at least as high a load factor. */
+        EXPECT_GE(lf, prev_lf - 1e-9) << "target=" << target << " lf=" << lf;
+        prev_lf = lf;
+    }
+}
+
 /* ========== Load-Factor Benchmark (DISABLED: run on demand) ==========
  * Reproduces a 50/50 add/delete steady state (no-merge baseline), then sweeps
  * the compaction target to report the achievable load factor + leaf reduction.
