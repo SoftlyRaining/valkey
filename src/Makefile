@@ -556,6 +556,7 @@ ENGINE_SERVER_OBJ = \
     sha256.o \
     siphash.o \
     ordered_index.o \
+    compaction.o \
     socket.o \
     sort.o \
     sparkline.o \
