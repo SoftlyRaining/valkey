@@ -3401,12 +3401,15 @@ void genericZpopCommand(client *c,
         ++result_count;
     } while (--rangelen);
 
-    /* Remove the key, if indeed needed. */
+    /* Remove the key, if indeed needed; otherwise the surviving B+tree zset just
+     * shrank, so consider it for background load-factor compaction. */
     if (zsetLength(zobj) == 0) {
         if (deleted) *deleted = 1;
 
         dbDelete(c->db, key);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+    } else {
+        zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     signalModifiedKey(c, c->db, key);
 
