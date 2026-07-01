@@ -1972,7 +1972,7 @@ struct valkeyServer {
     int zset_compaction_target_pct;              /* compact leaves toward this % fill */
     int zset_compaction_min_length;              /* skip sets smaller than this many items */
     int zset_compaction_cycle_keys;              /* items processed per cron drain step */
-    struct compactQueue *zset_compaction_queue;  /* pending (db,key) candidates */
+    struct fifo *zset_compaction_queue;          /* pending (db,key) candidates */
     int zset_compaction_cur_db;                  /* in-progress candidate db (resume across ticks) */
     sds zset_compaction_cur_key;                 /* in-progress candidate key, NULL when idle */
     unsigned long zset_compaction_cursor;        /* in-progress compaction cursor */

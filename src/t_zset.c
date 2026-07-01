@@ -52,7 +52,7 @@
 
 #include "server.h"
 #include "ordered_index.h"
-#include "compaction.h"
+#include "fifo.h"
 #include "intset.h" /* Compact integer set structure */
 #include "mt19937-64.h"
 #include <math.h>
@@ -1295,7 +1295,23 @@ void zincrbyCommand(client *c) {
     zaddGenericCommand(c, ZADD_IN_INCR);
 }
 
-/* ===== Background load-factor compaction (see compaction.c) ===== */
+/* ===== Background load-factor compaction ===== */
+
+/* A sorted set flagged for background compaction, boxed onto a fifo of pending
+ * (db, key) candidates. The key is an owned copy, freed when the candidate is
+ * drained. The fifo holds key NAMES, never live object pointers, so a candidate
+ * that is deleted or refilled before it drains is handled safely at drain time. */
+typedef struct zsetCompactCandidate {
+    int dbid;
+    sds key;
+} zsetCompactCandidate;
+
+/* A B+tree set is worth enqueuing when it holds at least min-length items and
+ * its load factor has fallen below the configured trigger fraction. */
+static int zsetShouldQueueCompaction(zset *zs) {
+    if (orderedIndexLength(zs->oi) < (unsigned long)server.zset_compaction_min_length) return 0;
+    return orderedIndexLoadFactor(zs->oi) < server.zset_compaction_trigger_pct / 100.0;
+}
 
 /* After a delete shrinks a B+tree-encoded sorted set, enqueue it for background
  * compaction if its load factor has dropped below the configured trigger. A
@@ -1305,13 +1321,13 @@ void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj) {
     if (zobj->encoding != OBJ_ENCODING_BTREE) return;
     zset *zs = objectGetVal(zobj);
     if (zs->compact_queued) return;
-    double trigger = server.zset_compaction_trigger_pct / 100.0;
-    if (!compactionShouldEnqueue(orderedIndexLoadFactor(zs->oi), trigger, orderedIndexLength(zs->oi),
-                                 (unsigned long)server.zset_compaction_min_length))
-        return;
-    if (!server.zset_compaction_queue) server.zset_compaction_queue = compactQueueCreate();
-    sds kbytes = objectGetVal(key); /* command key args are sds-backed strings */
-    compactQueuePush(server.zset_compaction_queue, db->id, kbytes, sdslen(kbytes));
+    if (!zsetShouldQueueCompaction(zs)) return;
+
+    if (!server.zset_compaction_queue) server.zset_compaction_queue = fifoCreate();
+    zsetCompactCandidate *cand = zmalloc(sizeof(*cand));
+    cand->dbid = db->id;
+    cand->key = sdsdup(objectGetVal(key)); /* owned copy of the key name */
+    fifoPush(server.zset_compaction_queue, cand);
     zs->compact_queued = 1;
 }
 
@@ -1326,11 +1342,13 @@ void zsetCompactionCron(void) {
 
     /* Pick up the next candidate if currently idle. */
     if (server.zset_compaction_cur_key == NULL) {
-        compactCandidate cand;
-        if (!compactQueuePop(server.zset_compaction_queue, &cand)) return;
-        server.zset_compaction_cur_db = cand.dbid;
-        server.zset_compaction_cur_key = cand.key; /* take ownership of the sds */
+        void *item;
+        if (!fifoPop(server.zset_compaction_queue, &item)) return;
+        zsetCompactCandidate *cand = item;
+        server.zset_compaction_cur_db = cand->dbid;
+        server.zset_compaction_cur_key = cand->key; /* take ownership of the sds */
         server.zset_compaction_cursor = 0;
+        zfree(cand);
     }
 
     serverDb *db = server.db[server.zset_compaction_cur_db];
