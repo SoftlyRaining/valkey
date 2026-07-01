@@ -220,6 +220,10 @@ size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size);
  * notion of load factor). */
 double orderedIndexLoadFactor(const OrderedIndex *oi);
 
+/* Number of leaf/bottom nodes backing the index (0 for backends with no such
+ * notion). Exposed for introspection (e.g. DEBUG OBJECT) and load-factor tests. */
+unsigned long orderedIndexNumLeaves(const OrderedIndex *oi);
+
 /* Incremental background compaction toward `target_load` (a fill fraction in
  * (0,1]), starting at rank `cursor` and processing roughly `budget` items per
  * call. Returns the next cursor, or 0 when the sweep is complete. Never changes

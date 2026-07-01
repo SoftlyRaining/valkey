@@ -218,6 +218,10 @@ double orderedIndexLoadFactor(const OrderedIndex *oi) {
     return fbtreeLoadFactor((fbtreeIndex *)oi);
 }
 
+unsigned long orderedIndexNumLeaves(const OrderedIndex *oi) {
+    return fbtreeNumLeaves((fbtreeIndex *)oi);
+}
+
 unsigned long orderedIndexCompactStep(OrderedIndex *oi, unsigned long cursor, double target_load, unsigned long budget) {
     /* Convert the backend-agnostic fill fraction to fbtree's items-per-leaf. */
     unsigned int cap = fbtreeLeafCapacity();
