@@ -527,6 +527,7 @@ robj *createZsetObject(void) {
 
     zs->ht = hashtableCreate(&zsetHashtableType);
     zs->oi = orderedIndexCreate();
+    zs->compact_queued = 0;
     o = createObject(OBJ_ZSET, zs);
     o->encoding = OBJ_ENCODING_BTREE;
     return o;

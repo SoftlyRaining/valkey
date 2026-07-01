@@ -52,6 +52,7 @@
 
 #include "server.h"
 #include "ordered_index.h"
+#include "compaction.h"
 #include "intset.h" /* Compact integer set structure */
 #include "mt19937-64.h"
 #include <math.h>
@@ -1294,6 +1295,70 @@ void zincrbyCommand(client *c) {
     zaddGenericCommand(c, ZADD_IN_INCR);
 }
 
+/* ===== Background load-factor compaction (see compaction.c) ===== */
+
+/* After a delete shrinks a B+tree-encoded sorted set, enqueue it for background
+ * compaction if its load factor has dropped below the configured trigger. A
+ * one-bit flag on the zset de-duplicates while a candidate is pending. */
+void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj) {
+    if (!server.zset_compaction_enabled) return;
+    if (zobj->encoding != OBJ_ENCODING_BTREE) return;
+    zset *zs = objectGetVal(zobj);
+    if (zs->compact_queued) return;
+    double trigger = server.zset_compaction_trigger_pct / 100.0;
+    if (!compactionShouldEnqueue(orderedIndexLoadFactor(zs->oi), trigger, orderedIndexLength(zs->oi),
+                                 (unsigned long)server.zset_compaction_min_length))
+        return;
+    if (!server.zset_compaction_queue) server.zset_compaction_queue = compactQueueCreate();
+    sds kbytes = objectGetVal(key); /* command key args are sds-backed strings */
+    compactQueuePush(server.zset_compaction_queue, db->id, kbytes, sdslen(kbytes));
+    zs->compact_queued = 1;
+}
+
+/* Drain one throttled compaction step from serverCron. Resumes an in-progress
+ * candidate, else pops the next, and runs orderedIndexCompactStep with a bounded
+ * budget. Stale candidates (key deleted or no longer B+tree-encoded) are dropped
+ * via a fresh keyspace lookup -- the queue only holds key NAMES, never live
+ * pointers, so this is lifecycle-safe. A refilled set self-heals: compaction
+ * never expands, so an already-packed tree finishes in one no-op step. */
+void zsetCompactionCron(void) {
+    if (!server.zset_compaction_queue) return;
+
+    /* Pick up the next candidate if currently idle. */
+    if (server.zset_compaction_cur_key == NULL) {
+        compactCandidate cand;
+        if (!compactQueuePop(server.zset_compaction_queue, &cand)) return;
+        server.zset_compaction_cur_db = cand.dbid;
+        server.zset_compaction_cur_key = cand.key; /* take ownership of the sds */
+        server.zset_compaction_cursor = 0;
+    }
+
+    serverDb *db = server.db[server.zset_compaction_cur_db];
+    robj *keyobj = createStringObject(server.zset_compaction_cur_key, sdslen(server.zset_compaction_cur_key));
+    robj *zobj = lookupKeyReadWithFlags(db, keyobj, LOOKUP_NONOTIFY | LOOKUP_NOTOUCH);
+    decrRefCount(keyobj);
+
+    int done = 1;
+    if (zobj && zobj->encoding == OBJ_ENCODING_BTREE) {
+        zset *zs = objectGetVal(zobj);
+        double target = server.zset_compaction_target_pct / 100.0;
+        unsigned long budget = (unsigned long)server.zset_compaction_cycle_keys;
+        unsigned long next = orderedIndexCompactStep(zs->oi, server.zset_compaction_cursor, target, budget);
+        if (next != 0) {
+            server.zset_compaction_cursor = next; /* more to do next tick */
+            done = 0;
+        } else {
+            zs->compact_queued = 0; /* finished: allow future re-enqueue */
+        }
+    }
+
+    if (done) {
+        sdsfree(server.zset_compaction_cur_key);
+        server.zset_compaction_cur_key = NULL;
+        server.zset_compaction_cursor = 0;
+    }
+}
+
 void zremCommand(client *c) {
     robj *key = c->argv[1];
     robj *zobj;
@@ -1317,6 +1382,7 @@ void zremCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         signalModifiedKey(c, c->db, key);
         server.dirty += deleted;
+        if (!keyremoved) zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     addReplyLongLong(c, deleted);
 }
@@ -1425,6 +1491,7 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         notifyKeyspaceEvent(NOTIFY_ZSET, notify_type, key, c->db->id);
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
         server.dirty += deleted;
+        if (!keyremoved) zsetMaybeQueueCompaction(c->db, key, zobj);
     }
     addReplyLongLong(c, deleted);
 
