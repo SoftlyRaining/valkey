@@ -4045,6 +4045,7 @@ void zaddCommand(client *c);
 /* Background load-factor compaction (compaction.c / t_zset.c). */
 void zsetMaybeQueueCompaction(serverDb *db, robj *key, robj *zobj);
 void zsetCompactionCron(void);
+void zsetCompactionCleanup(void);
 void zincrbyCommand(client *c);
 void zrangeCommand(client *c);
 void zrangebyscoreCommand(client *c);

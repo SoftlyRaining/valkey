@@ -5018,6 +5018,9 @@ int finishShutdown(void) {
     /* Free the AOF manifest. */
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
 
+    /* Free the background zset compaction queue. */
+    zsetCompactionCleanup();
+
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
 
