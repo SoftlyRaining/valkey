@@ -1307,8 +1307,14 @@ typedef struct zsetCompactCandidate {
 } zsetCompactCandidate;
 
 /* A B+tree set is worth enqueuing when it holds at least min-length items and
- * its load factor has fallen below the configured trigger fraction. */
+ * its load factor has fallen below the configured trigger fraction.
+ *
+ * Guard against a churning misconfiguration: if the target fill is not strictly
+ * above the trigger, a set compacted to ~target would still sit at/under the
+ * trigger and be re-enqueued on the next delete. Rather than cross-validate two
+ * independent config knobs, we simply treat target <= trigger as "off". */
 static int zsetShouldQueueCompaction(zset *zs) {
+    if (server.zset_compaction_target_pct <= server.zset_compaction_trigger_pct) return 0;
     if (orderedIndexLength(zs->oi) < (unsigned long)server.zset_compaction_min_length) return 0;
     return orderedIndexLoadFactor(zs->oi) < server.zset_compaction_trigger_pct / 100.0;
 }
@@ -1374,6 +1380,25 @@ void zsetCompactionCron(void) {
         sdsfree(server.zset_compaction_cur_key);
         server.zset_compaction_cur_key = NULL;
         server.zset_compaction_cursor = 0;
+    }
+}
+
+/* Release the compaction queue and any in-progress candidate. Called on
+ * shutdown so a leak sanitizer sees a clean teardown. */
+void zsetCompactionCleanup(void) {
+    if (server.zset_compaction_queue) {
+        void *item;
+        while (fifoPop(server.zset_compaction_queue, &item)) {
+            zsetCompactCandidate *cand = item;
+            sdsfree(cand->key);
+            zfree(cand);
+        }
+        fifoRelease(server.zset_compaction_queue);
+        server.zset_compaction_queue = NULL;
+    }
+    if (server.zset_compaction_cur_key) {
+        sdsfree(server.zset_compaction_cur_key);
+        server.zset_compaction_cur_key = NULL;
     }
 }
 
