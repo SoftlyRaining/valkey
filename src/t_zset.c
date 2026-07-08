@@ -684,6 +684,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
         zs = zmalloc(sizeof(*zs));
         zs->ht = hashtableCreate(&zsetHashtableType);
         zs->oi = orderedIndexCreate();
+        zs->compact_queued = 0;
 
         /* Presize the dict to avoid rehashing */
         hashtableExpand(zs->ht, cap);

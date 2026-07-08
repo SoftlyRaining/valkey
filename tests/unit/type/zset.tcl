@@ -3173,4 +3173,37 @@ start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
         assert_equal 1999 [r zscore z m1999]
         assert_equal 998 [r zrank z m1999]
     }
+
+    test {ZSET btree compaction works on listpack-to-btree converted sets} {
+        # Regression: zsetConvertAndExpand did not init compact_queued, so a
+        # converted zset carried garbage in the field and might never compact.
+        r config set zset-max-ziplist-entries 128
+
+        # Phase 1: build set that starts as listpack and converts to btree.
+        r config set zset-compaction no
+        r del z
+        for {set i 0} {$i < 2000} {incr i} { r zadd z $i m$i }
+        assert_encoding btree z
+
+        # Sparse-delete to drive load factor well below trigger.
+        for {set i 0} {$i < 2000} {incr i 2} { r zrem z m$i }
+        assert_equal 1000 [r zcard z]
+        assert {[zset_load_factor z] < 0.6}
+
+        # Phase 2: enable compaction and trigger with one more delete.
+        set_aggressive_compaction_params
+        r config set zset-compaction yes
+        r zrem z m1
+        assert_equal 999 [r zcard z]
+
+        wait_for_condition 50 100 {
+            [zset_load_factor z] > 0.70
+        } else {
+            fail "compaction did not fire on converted zset (lf=[zset_load_factor z])"
+        }
+
+        # Data intact.
+        assert_equal 999 [r zcard z]
+        assert_encoding btree z
+    }
 }
