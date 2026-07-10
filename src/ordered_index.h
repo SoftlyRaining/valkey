@@ -215,6 +215,21 @@ void orderedIndexDismissMemory(OrderedIndex *oi);
 /* Estimate total memory usage by averaging the specified number of sample elements. */
 size_t orderedIndexEstimateMemory(const OrderedIndex *oi, size_t sample_size);
 
+/* Current load factor in (0, 1]: fraction of allocated slots in use. Returns
+ * 1.0 when there is no reclaimable slack (e.g. empty, or a backend with no
+ * notion of load factor). */
+double orderedIndexLoadFactor(const OrderedIndex *oi);
+
+/* Number of leaf/bottom nodes backing the index (0 for backends with no such
+ * notion). Exposed for introspection (e.g. DEBUG OBJECT) and load-factor tests. */
+unsigned long orderedIndexNumLeaves(const OrderedIndex *oi);
+
+/* Incremental background compaction toward `limit_load` (a fill fraction in
+ * (0,1]), starting at rank `cursor` and processing roughly `budget` items per
+ * call. Returns the next cursor, or 0 when the sweep is complete. Never changes
+ * the element count and never invalidates companion-hashtable item pointers. */
+unsigned long orderedIndexCompactStep(OrderedIndex *oi, unsigned long cursor, double limit_load, unsigned long budget);
+
 /* Defrag data structure internals. Returns new pointer if reallocated. */
 OrderedIndex *orderedIndexDefragInternals(OrderedIndex *oi, void *(*defragfn)(void *));
 

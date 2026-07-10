@@ -1719,6 +1719,11 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         }
     }
 
+    /* Background fbtree ZSET load-factor compaction: drain one throttled step. */
+    run_with_period(100) {
+        if (server.zset_compaction_enabled) zsetCompactionCron();
+    }
+
     /* Clear the paused actions state if needed. */
     updatePausedActions();
 
@@ -5012,6 +5017,9 @@ int finishShutdown(void) {
 
     /* Free the AOF manifest. */
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
+
+    /* Free the background zset compaction queue. */
+    zsetCompactionCleanup();
 
     /* Fire the shutdown modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN, 0, NULL);
