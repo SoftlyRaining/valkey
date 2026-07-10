@@ -1311,11 +1311,11 @@ typedef struct zsetCompactCandidate {
  * its load factor has fallen below the configured trigger fraction.
  *
  * Guard against a churning misconfiguration: if the target fill is not strictly
- * above the trigger, a set compacted to ~target would still sit at/under the
+ * above the trigger, a set compacted to ~limit would still sit at/under the
  * trigger and be re-enqueued on the next delete. Rather than cross-validate two
- * independent config knobs, we simply treat target <= trigger as "off". */
+ * independent config knobs, we simply treat limit <= trigger as "off". */
 static int zsetShouldQueueCompaction(zset *zs) {
-    if (server.zset_compaction_target_pct <= server.zset_compaction_trigger_pct) return 0;
+    if (server.zset_compaction_limit_pct <= server.zset_compaction_trigger_pct) return 0;
     if (orderedIndexLength(zs->oi) < (unsigned long)server.zset_compaction_min_length) return 0;
     return orderedIndexLoadFactor(zs->oi) < server.zset_compaction_trigger_pct / 100.0;
 }
@@ -1366,9 +1366,9 @@ void zsetCompactionCron(void) {
     int done = 1;
     if (zobj && zobj->encoding == OBJ_ENCODING_BTREE) {
         zset *zs = objectGetVal(zobj);
-        double target = server.zset_compaction_target_pct / 100.0;
+        double limit = server.zset_compaction_limit_pct / 100.0;
         unsigned long budget = (unsigned long)server.zset_compaction_cycle_keys;
-        unsigned long next = orderedIndexCompactStep(zs->oi, server.zset_compaction_cursor, target, budget);
+        unsigned long next = orderedIndexCompactStep(zs->oi, server.zset_compaction_cursor, limit, budget);
         if (next != 0) {
             server.zset_compaction_cursor = next; /* more to do next tick */
             done = 0;

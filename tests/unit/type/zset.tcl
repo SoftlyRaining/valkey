@@ -3135,7 +3135,7 @@ start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
     proc set_aggressive_compaction_params {} {
         r config set zset-compaction-min-length 1
         r config set zset-compaction-trigger-percent 70
-        r config set zset-compaction-target-percent 80
+        r config set zset-compaction-limit-percent 80
         r config set zset-compaction-cycle-keys 100000
     }
 
@@ -3154,7 +3154,7 @@ start_server {tags {"zset" "needs:debug"} overrides {save ""}} {
 
         # Phase 2: enable compaction. Nothing is queued yet (the deletes above ran
         # while it was off), so one more delete crosses the trigger and enqueues the
-        # still-sparse set; the serverCron drain then compacts it toward the target.
+        # still-sparse set; the serverCron drain then compacts it toward the limit.
         set_aggressive_compaction_params
         r config set zset-compaction yes
         r zrem z m1 ; # LF still < trigger => enqueue

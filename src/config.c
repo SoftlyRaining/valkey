@@ -3289,7 +3289,7 @@ standardConfig static_configs[] = {
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
     createBoolConfig("zset-compaction", NULL, MODIFIABLE_CONFIG, server.zset_compaction_enabled, 1, NULL, NULL),
     createIntConfig("zset-compaction-trigger-percent", NULL, MODIFIABLE_CONFIG, 1, 99, server.zset_compaction_trigger_pct, 50, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("zset-compaction-target-percent", NULL, MODIFIABLE_CONFIG, 1, 100, server.zset_compaction_target_pct, 80, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("zset-compaction-limit-percent", NULL, MODIFIABLE_CONFIG, 1, 100, server.zset_compaction_limit_pct, 80, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("zset-compaction-min-length", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.zset_compaction_min_length, 128, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("zset-compaction-cycle-keys", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.zset_compaction_cycle_keys, 1000, INTEGER_CONFIG, NULL, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, server.syslog_enabled, 0, NULL, NULL),

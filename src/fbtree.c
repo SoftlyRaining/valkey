@@ -1256,19 +1256,19 @@ double fbtreeLoadFactor(fbtreeIndex *fbt) {
  * the next cursor, or 0 once the whole tree has been swept).
  * ============================================================ */
 
-/* Compact the leaves under bottom inner node `p` to an even fill of `target`
+/* Compact the leaves under bottom inner node `p` to an even fill of `limit`
  * items per leaf. Returns true if the layout changed (surplus leaves freed). */
-static bool compactBottomInnerLeaves(fbtreeIndex *fbt, innerNode *p, unsigned int target) {
+static bool compactBottomInnerLeaves(fbtreeIndex *fbt, innerNode *p, unsigned int limit) {
     int k = p->header.num_items;
     assert(k > 0 && p->children[0]->is_leaf);
 
     size_t total = getSubtreeSize((node *)p);
     if (total == 0) return false;
 
-    /* Leaves needed to hold `total` items at `target` per leaf. Only compact
+    /* Leaves needed to hold `total` items at `limit` per leaf. Only compact
      * when this strictly reduces the leaf count; otherwise the node is already
-     * at least as tight as the target (this also makes the op idempotent). */
-    size_t needed = (total + target - 1) / target;
+     * at least as tight as the limit (this also makes the op idempotent). */
+    size_t needed = (total + limit - 1) / limit;
     if (needed >= (size_t)k) return false;
 
     /* Gather all item pointers in order. Only pointers move -- no item is
@@ -1347,9 +1347,9 @@ static innerNode *bottomInnerAtRank(fbtreeIndex *fbt, unsigned long rank, unsign
     return inner;
 }
 
-unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int target, unsigned long budget) {
-    if (target == 0) target = 1;
-    if (target > (unsigned)NODE_SIZE) target = (unsigned)NODE_SIZE;
+unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned int limit, unsigned long budget) {
+    if (limit == 0) limit = 1;
+    if (limit > (unsigned)NODE_SIZE) limit = (unsigned)NODE_SIZE;
 
     unsigned long length = fbtreeLength(fbt);
     if (cursor >= length) return 0;
@@ -1365,7 +1365,7 @@ unsigned long fbtreeCompactStep(fbtreeIndex *fbt, unsigned long cursor, unsigned
         /* Items are conserved by compaction, so the next bottom inner node
          * always begins at start + node_items. */
         size_t node_items = getSubtreeSize((node *)p);
-        if (compactBottomInnerLeaves(fbt, p, target) && parent) {
+        if (compactBottomInnerLeaves(fbt, p, limit) && parent) {
             /* Compaction reduced p's direct child count. Its subtree size and
              * high-key anchor are unchanged (so child_sizes/anchors/features
              * above stay valid), but the parent's cached direct child count must
